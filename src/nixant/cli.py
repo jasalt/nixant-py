@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 from dataclasses import replace
-from typing import Any
+from typing import Annotated, Any
 
 import click
 import typer
@@ -14,7 +14,7 @@ from nixant.errors import NixantError, UsageError
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build
 from nixant.nix.eval import evaluate
-from nixant.ownership import metadata, resolve
+from nixant.ownership import PREFIX, lookup, metadata, require_instance, resolve
 from nixant.project import discover_project, resolve_mount_sources, target_lock
 from nixant.providers.incus import IncusProvider
 from nixant.readiness import wait_ready
@@ -170,3 +170,46 @@ def rebuild(
 ) -> None:
     """Build and always activate an existing running environment."""
     _deploy(ctx, target, timeout, rebuild=True)
+
+
+def _enter(ctx: typer.Context, target: str, command: list[str] | None) -> None:
+    provider = IncusProvider(ctx.obj["runner"])
+    state = require_instance(lookup(provider, discover_project(), target))
+    if state.status != "Running":
+        raise NixantError(f"instance {state.name} is not running; run nixant up")
+    user = state.config.get(PREFIX + "user")
+    workdir = state.config.get(PREFIX + "workdir")
+    if not user or not workdir:
+        raise NixantError("no completed activation yet; run nixant up")
+    if command is None:
+        # The outer login bash sets the NixOS environment; the inner bash execs
+        # the user's passwd shell as a login shell, including fish and zsh.
+        command = [
+            "/run/current-system/sw/bin/bash",
+            "-c",
+            'exec -l "$(getent passwd "$(id -un)" | cut -d: -f7)"',
+        ]
+    argv = provider.exec_argv(state.name, command, user=user, cwd=workdir)
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        raise NixantError(f"cannot execute incus: {exc}") from exc
+
+
+@app.command()
+def shell(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
+    """Enter the guest user's login shell without evaluating Nix."""
+    _enter(ctx, target, None)
+
+
+@app.command(
+    "exec",
+    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
+)
+def exec_command(
+    ctx: typer.Context,
+    command: Annotated[list[str], typer.Argument()],
+    target: str = typer.Option("dev", "--target", "-n"),
+) -> None:
+    """Run a guest command, preserving its arguments and exit status."""
+    _enter(ctx, target, command)
