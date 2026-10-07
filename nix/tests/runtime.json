@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "container",
+  "instanceName": "test-dev",
+  "user": {"name": "dev", "uid": 1000, "gid": 1000, "home": "/home/dev", "shell": "/run/current-system/sw/bin/bash"},
+  "cpus": null,
+  "memoryBytes": null,
+  "diskBytes": null,
+  "mounts": {"workspace": {"source": ".", "target": "/workspace", "readOnly": false}},
+  "ports": [],
+  "workdir": "/workspace"
+}

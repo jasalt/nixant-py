@@ -30,7 +30,16 @@
         program = "${self.packages.${system}.default}/bin/nixant";
       };
 
-      checks.${system}.package = self.packages.${system}.default;
+      nixosModules.options = import ./nix/modules/options.nix;
+
+      checks.${system} = {
+        package = self.packages.${system}.default;
+        options = pkgs.runCommand "nixant-options-tests" {
+          results = builtins.toJSON (import ./nix/tests/options.nix { inherit nixpkgs system; });
+        } ''
+          echo "$results" > "$out"
+        '';
+      };
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [
