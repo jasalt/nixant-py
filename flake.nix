@@ -16,7 +16,7 @@
         pyproject = true;
         build-system = [ python.pkgs.hatchling ];
         dependencies = [ python.pkgs.typer ];
-        nativeCheckInputs = [ python.pkgs.pytestCheckHook ];
+        nativeCheckInputs = [ python.pkgs.pytestCheckHook pkgs.git ];
         pythonImportsCheck = [ "nixant.cli" ];
         makeWrapperArgs = [
           "--set NIXANT_SELF ${self}"
