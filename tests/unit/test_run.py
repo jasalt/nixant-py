@@ -77,6 +77,35 @@ def test_reject_shell_commands(argv: str | list[str]) -> None:
         Runner().run(argv)
 
 
+def test_tee_stderr(capfd: pytest.CaptureFixture[str]) -> None:
+    result = Runner().run(
+        [sys.executable, "-c", "import sys; print('progress', file=sys.stderr)"],
+        tee_stderr=True,
+    )
+    assert result.stderr == b"progress\n"
+    assert capfd.readouterr().err == "progress\n"
+
+
+def test_pipe_binary_and_failure() -> None:
+    with Runner().pipe(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'abc')"]
+    ) as stream:
+        assert stream.read() == b"abc"
+    with (
+        pytest.raises(CommandError),
+        Runner().pipe([sys.executable, "-c", "raise SystemExit(3)"]) as stream,
+    ):
+        assert stream.read() == b""
+
+
+def test_pipe_consumer_failure_terminates_producer() -> None:
+    with (
+        pytest.raises(RuntimeError),
+        Runner().pipe([sys.executable, "-c", "import time; time.sleep(60)"]),
+    ):
+        raise RuntimeError("consumer failed")
+
+
 def test_missing_host_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", "")
     with pytest.raises(NixantError, match="incus, nix, git"):

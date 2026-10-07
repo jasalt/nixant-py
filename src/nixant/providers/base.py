@@ -29,6 +29,7 @@ class Provider(Protocol):
         stdin: BinaryIO | None = None,
         capture: bool = False,
         capture_stderr: bool = False,
+        tee_stderr: bool = False,
         check: bool = True,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[bytes]: ...

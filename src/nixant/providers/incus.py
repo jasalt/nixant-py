@@ -255,6 +255,7 @@ class IncusProvider:
         stdin: BinaryIO | None = None,
         capture: bool = False,
         capture_stderr: bool = False,
+        tee_stderr: bool = False,
         check: bool = True,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
@@ -272,6 +273,7 @@ class IncusProvider:
             stdin=stdin,
             capture=capture,
             capture_stderr=capture_stderr,
+            tee_stderr=tee_stderr,
             check=check,
             timeout=timeout,
         )
