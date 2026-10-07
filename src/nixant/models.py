@@ -1,12 +1,38 @@
 """Immutable runtime values shared by evaluation, planning, and providers."""
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from nixant.errors import NixantError
 
 SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class MachineState:
+    name: str
+    status: str
+    kind: str
+    config: Mapping[str, str]
+    devices: Mapping[str, Mapping[str, str]]
+    ipv4: tuple[str, ...] = ()
+    created_at: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "config", MappingProxyType(dict(self.config)))
+        object.__setattr__(
+            self,
+            "devices",
+            MappingProxyType(
+                {
+                    name: MappingProxyType(dict(device))
+                    for name, device in self.devices.items()
+                }
+            ),
+        )
 
 
 @dataclass(frozen=True)
