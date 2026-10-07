@@ -46,4 +46,12 @@ in {
       install -m 0644 ${readme} /etc/nixos/README
     '';
   };
+  # Switching does not change the kernel hostname of a running container; the
+  # image's hostname would otherwise persist until the next boot.
+  system.activationScripts.nixant-hostname = {
+    deps = [ "etc" ];
+    text = ''
+      ${pkgs.nettools}/bin/hostname ${lib.escapeShellArg config.networking.hostName} || true
+    '';
+  };
 }

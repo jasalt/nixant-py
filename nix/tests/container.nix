@@ -28,6 +28,8 @@ let
     flakes = builtins.elem "flakes" config.nix.settings.experimental-features;
     staleGuard = lib.hasInfix "rm -f /etc/nixos/configuration.nix /etc/nixos/incus.nix"
       config.system.activationScripts.nixant-stale-config.text;
+    hostnameActivation = lib.hasInfix "bin/hostname"
+      config.system.activationScripts.nixant-hostname.text;
     assertions = lib.all (item: item.assertion) config.assertions;
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))
