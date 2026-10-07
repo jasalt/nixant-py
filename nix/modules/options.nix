@@ -27,6 +27,11 @@ let
       };
       target = mkOption { type = types.str; description = "Absolute guest mount path."; };
       readOnly = mkOption { type = types.bool; default = false; };
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Set to false to drop a mount, e.g. the default workspace.";
+      };
     };
   };
   portType = types.submodule {
@@ -36,8 +41,12 @@ let
       address = mkOption { type = types.str; default = "127.0.0.1"; };
     };
   };
-  targets = map (mount: mount.target) (builtins.attrValues cfg.mounts);
+  mounts = lib.filterAttrs (_: mount: mount.enable) cfg.mounts;
+  targets = map (mount: mount.target) (builtins.attrValues mounts);
   hostPorts = map (port: port.host) cfg.ports;
+  agent = cfg.isolation == "agent";
+  extraWritableMounts = builtins.attrNames
+    (lib.filterAttrs (name: mount: name != "workspace" && !mount.readOnly) mounts);
   validations = [
     { assertion = cfg.instanceName != null; message = "Set nixant.instanceName = \"my-project-dev\" in your NixOS configuration."; }
     { assertion = cfg.instanceName == null ||
@@ -53,6 +62,12 @@ let
       message = "nixant.workdir must be an absolute path."; }
     { assertion = builtins.length hostPorts == builtins.length (lib.unique hostPorts);
       message = "nixant.ports host ports must be unique."; }
+    { assertion = !agent || !cfg.user.sudo;
+      message = "nixant.isolation = \"agent\" forbids nixant.user.sudo; remove the override."; }
+    { assertion = !agent || extraWritableMounts == [];
+      message = "nixant.isolation = \"agent\" only allows writing to the workspace mount; make these read-only: ${lib.concatStringsSep ", " extraWritableMounts}."; }
+    { assertion = !agent || cfg.ports == [];
+      message = "nixant.isolation = \"agent\" does not publish host ports; remove nixant.ports."; }
     { assertion = lib.versionAtLeast lib.trivial.release "26.05";
       message = "nixant requires nixpkgs 26.05 or newer: the bootstrap image is newer, and switching a guest down to an older release hangs in switch-to-configuration."; }
   ];
@@ -65,14 +80,25 @@ in {
     user = {
       name = mkOption { type = types.str; default = "dev"; };
       uid = mkOption { type = types.ints.unsigned; default = 1000; };
-      sudo = mkOption { type = types.bool; default = true; };
+      # Explicit values win; an explicit true under isolation = "agent" is rejected.
+      sudo = mkOption { type = types.bool; default = !agent; };
     };
-    cpus = mkOption { type = types.nullOr types.ints.positive; default = null; };
-    memory = mkOption { type = sizeType; default = null; apply = parseSize; };
+    isolation = mkOption {
+      type = types.enum [ "none" "agent" ];
+      default = "none";
+      description = ''
+        "agent" restricts the guest for autonomous coding agents: no sudo, no
+        wheel membership, not a trusted Nix user, only the workspace mount
+        writable, no published ports, and default CPU/memory caps.
+      '';
+    };
+    cpus = mkOption { type = types.nullOr types.ints.positive; default = if agent then 2 else null; };
+    memory = mkOption { type = sizeType; default = if agent then "4GiB" else null; apply = parseSize; };
     disk = mkOption { type = sizeType; default = null; apply = parseSize; };
     mounts = mkOption {
       type = types.attrsOf mountType;
-      default.workspace = { source = "."; target = "/workspace"; };
+      default = {};
+      description = "Host mounts; `workspace` (the project root at /workspace) is defined by default.";
     };
     workdir = mkOption { type = types.nullOr types.str; default = null; };
     ephemeral = mkOption {
@@ -89,6 +115,8 @@ in {
     };
   };
   config = lib.mkIf cfg.enable {
+    # A default on the option itself would vanish as soon as another mount is added.
+    nixant.mounts.workspace = lib.mkDefault { source = "."; target = "/workspace"; };
     assertions = validations;
     nixant.runtime = if errors != [] then throw (lib.concatStringsSep "\n" errors) else {
       schemaVersion = 1;
@@ -96,10 +124,10 @@ in {
       inherit (cfg) instanceName cpus ephemeral;
       memoryBytes = cfg.memory;
       diskBytes = cfg.disk;
-      mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) cfg.mounts;
+      mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) mounts;
       ports = map (port: { inherit (port) host guest address; }) cfg.ports;
       workdir = if cfg.workdir != null then cfg.workdir
-        else if cfg.mounts ? workspace then cfg.mounts.workspace.target else user.home;
+        else if mounts ? workspace then mounts.workspace.target else user.home;
       user = {
         inherit (cfg.user) name uid;
         gid = config.users.groups.${user.group}.gid;

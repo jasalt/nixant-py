@@ -1,6 +1,7 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.nixant;
+  agent = cfg.isolation == "agent";
   message = "This system is managed by nixant (instance ${cfg.instanceName}). Edit the project flake and run `nixant rebuild` on the host.";
   stub = pkgs.writeText "nixant-configuration.nix" "throw ${builtins.toJSON message}\n";
   readme = pkgs.writeText "nixant-nixos-README" "${message}\n";
@@ -18,7 +19,7 @@ in {
     uid = cfg.user.uid;
     group = cfg.user.name;
     home = "/home/${cfg.user.name}";
-    extraGroups = [ "wheel" ];
+    extraGroups = lib.optional (!agent) "wheel";
   };
   users.groups.${cfg.user.name}.gid = cfg.user.uid;
   security.sudo.extraRules = lib.mkIf cfg.user.sudo [ {
@@ -28,7 +29,7 @@ in {
   nix.settings = {
     experimental-features = lib.mkDefault [ "nix-command" "flakes" ];
     # NixOS defines root at normal priority; mkDefault here would drop the user.
-    trusted-users = [ cfg.user.name ];
+    trusted-users = lib.mkIf (!agent) [ cfg.user.name ];
   };
   system.activationScripts.nixant-stale-config = {
     deps = [ "etc" ];

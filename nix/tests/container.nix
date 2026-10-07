@@ -30,6 +30,17 @@ let
       config.system.activationScripts.nixant-stale-config.text;
     hostnameActivation = lib.hasInfix "bin/hostname"
       config.system.activationScripts.nixant-hostname.text;
+    agentNoPrivileges = let agentConfig = evaluate { nixant.isolation = "agent"; }; in
+      !(lib.any (rule: builtins.elem "dev" rule.users) agentConfig.security.sudo.extraRules) &&
+      !(builtins.elem "wheel" agentConfig.users.users.dev.extraGroups) &&
+      !(builtins.elem "dev" agentConfig.nix.settings.trusted-users) &&
+      builtins.elem "root" agentConfig.nix.settings.trusted-users;
+    agentLimitDefaults = let runtime = (evaluate { nixant.isolation = "agent"; }).nixant.runtime; in
+      runtime.cpus == 2 && runtime.memoryBytes == 4294967296;
+    agentLimitOverride = let runtime = (evaluate { nixant.isolation = "agent"; nixant.cpus = 4; nixant.memory = "1GiB"; }).nixant.runtime; in
+      runtime.cpus == 4 && runtime.memoryBytes == 1073741824;
+    agentExplicitSudoFails = !(lib.all (item: item.assertion)
+      (evaluate { nixant.isolation = "agent"; nixant.user.sudo = true; }).assertions);
     assertions = lib.all (item: item.assertion) config.assertions;
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))

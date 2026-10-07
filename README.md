@@ -87,7 +87,18 @@ nixant = {
 - Leaving `cpus`, `memory` or `disk` as `null` keeps whatever the instance has.
 - Shrinking `disk` is refused. A storage pool that cannot enforce quotas (driver `dir`) is refused before anything is created.
 - `ephemeral = true` creates an Incus ephemeral instance: `nixant down` stops it and Incus deletes it (the next `up` builds a new one). The flag is fixed at creation; flipping it on an existing instance is refused until you destroy it.
+- The `workspace` mount (project root at `/workspace`) stays in place when you add other mounts; drop it with `nixant.mounts.workspace.enable = false`.
 - Mounts and ports that disappear from the configuration are removed from the instance.
+
+## Agent isolation
+
+`nixant.isolation = "agent"` restricts the guest for autonomous coding agents:
+
+- no passwordless sudo, no `wheel` membership, and the user is not a trusted Nix user;
+- only the `workspace` mount may be writable (other mounts must set `readOnly = true`), and no host ports are published;
+- `cpus = 2` and `memory = "4GiB"` unless you set them.
+
+Violations fail at evaluation time with a message naming the offending option. The profile does not restrict the guest's network access.
 
 ## Containers and VMs
 

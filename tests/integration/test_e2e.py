@@ -382,3 +382,24 @@ def test_ephemeral_instance_vanishes_on_down(project: Project) -> None:
     refused = project.nixant("up", check=False)
     assert refused.returncode != 0
     assert "ephemeral" in refused.stderr + refused.stdout
+
+
+def test_agent_isolation_profile(project: Project, tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    (reference / "doc").write_text("read me")
+    project.write_module(
+        f'{{ nixant.user.uid = {os.getuid()}; nixant.isolation = "agent"; '
+        f'nixant.mounts.reference = {{ source = "{reference}"; '
+        'target = "/reference"; readOnly = true; }; }\n'
+    )
+    project.nixant("up")
+    assert project.exec("sudo", "-n", "true", check=False).returncode != 0
+    assert "wheel" not in project.exec("id", "-Gn").stdout.split()
+    assert project.exec("nproc").stdout.strip() == "2"
+    project.exec("touch", "/workspace/agent-output")
+    assert (project.root / "agent-output").exists()
+    assert project.exec("cat", "/reference/doc").stdout == "read me"
+    assert project.exec("touch", "/reference/x", check=False).returncode != 0
+    trusted = project.exec("nix", "config", "show", "trusted-users").stdout.split()
+    assert "dev" not in trusted

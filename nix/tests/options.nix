@@ -47,13 +47,23 @@ let
     duplicateTargets = rejects { nixant.mounts = {
       a = { source = "."; target = "/same"; }; b = { source = "."; target = "/same"; };
     }; };
-    homeFallback = (evaluate { nixant.mounts = {}; }).workdir == "/home/dev";
+    homeFallback = (evaluate { nixant.mounts.workspace.enable = false; }).workdir == "/home/dev";
+    workspaceSurvivesOtherMounts = let runtime = evaluate { nixant.mounts.data = { source = "/d"; target = "/data"; }; };
+      in runtime.mounts ? workspace && runtime.mounts ? data;
+    workspaceCanBeRetargeted = (evaluate { nixant.mounts.workspace.target = "/code"; }).workdir == "/code";
+    noWorkspaceMounts = !((evaluate { nixant.mounts.workspace.enable = false; }).mounts ? workspace);
     explicitWorkdir = (evaluate { nixant.workdir = "/tmp"; }).workdir == "/tmp";
     relativeWorkdir = rejects { nixant.workdir = "relative"; };
     badPort = rejects { nixant.ports = [{ host = 65536; guest = 80; }]; };
     duplicatePorts = rejects { nixant.ports = [ { host = 80; guest = 80; } { host = 80; guest = 81; } ]; };
     portDefault = (builtins.head (evaluate { nixant.ports = [{ host = 8080; guest = 80; }]; }).ports).address == "127.0.0.1";
     ephemeral = (evaluate { nixant.ephemeral = true; }).ephemeral && !base.ephemeral;
+    agentWritableExtraMount = rejects { nixant.isolation = "agent"; nixant.mounts.data = { source = "/d"; target = "/data"; }; };
+    agentReadOnlyExtraMount = succeeds (evaluate { nixant.isolation = "agent"; nixant.mounts.data = { source = "/d"; target = "/data"; readOnly = true; }; });
+    agentWorkspaceStaysWritable = !(evaluate { nixant.isolation = "agent"; }).mounts.workspace.readOnly;
+    agentPorts = rejects { nixant.isolation = "agent"; nixant.ports = [{ host = 8080; guest = 80; }]; };
+    agentSudo = rejects { nixant.isolation = "agent"; nixant.user.sudo = true; };
+    badIsolation = rejects { nixant.isolation = "paranoid"; };
     readOnly = rejects { nixant.runtime = {}; };
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))
