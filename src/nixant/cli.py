@@ -1,5 +1,6 @@
 """Command-line entry point."""
 
+import json
 import os
 import re
 import subprocess
@@ -11,11 +12,24 @@ import typer
 from typer.core import TyperGroup
 
 from nixant.errors import CommandError, NixantError, UsageError
+from nixant.models import SCHEMA_VERSION
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build, gcroot_path
 from nixant.nix.eval import evaluate
-from nixant.ownership import PREFIX, lookup, metadata, require_instance, resolve
-from nixant.project import discover_project, resolve_mount_sources, target_lock
+from nixant.ownership import (
+    PREFIX,
+    check_owner,
+    lookup,
+    metadata,
+    require_instance,
+    resolve,
+)
+from nixant.project import (
+    discover_project,
+    project_id,
+    resolve_mount_sources,
+    target_lock,
+)
 from nixant.providers.incus import IncusProvider
 from nixant.readiness import wait_ready
 from nixant.run import Runner, check_host_tools
@@ -257,3 +271,66 @@ def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
             gcroot_path(root, target).unlink(missing_ok=True)
         except OSError as exc:
             raise NixantError(f"cannot remove GC root: {exc}") from exc
+
+
+@app.command()
+def status(ctx: typer.Context, target: str | None = typer.Argument(None)) -> None:
+    """Show metadata and cached build status without evaluating Nix."""
+    root = discover_project()
+    provider = IncusProvider(ctx.obj["runner"])
+    if target is not None:
+        state = lookup(provider, root, target, require_schema=False)
+        states = [state] if state else []
+    else:
+        states = provider.find(
+            {PREFIX + "managed": "true", PREFIX + "project": project_id(root)}
+        )
+    if not states:
+        typer.echo(f"{target or 'project'}: not created")
+    for state in states:
+        recorded_target = state.config.get(PREFIX + "target", "")
+        check_owner(state, root, recorded_target)
+        system = state.config.get(PREFIX + "system", "none")
+        activation = state.config.get(PREFIX + "activation", "none")
+        link = gcroot_path(root, recorded_target)
+        current = "unknown"
+        if link.is_symlink():
+            current = "current" if str(link.resolve()) == system else "outdated"
+        schema = state.config.get(PREFIX + "schema", "missing")
+        mismatch = (
+            f"; schema mismatch ({schema} != {SCHEMA_VERSION})"
+            if schema != str(SCHEMA_VERSION)
+            else ""
+        )
+        typer.echo(
+            f"{state.name}  {state.status.upper()}  "
+            f"{state.kind}  {' '.join(state.ipv4)}"
+        )
+        typer.echo(
+            f"target: {recorded_target}  system: {system} "
+            f"({activation}, {current}{mismatch})"
+        )
+        typer.echo(f"root: {state.config.get(PREFIX + 'root', 'unknown')}")
+
+
+@app.command("config")
+def show_config(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
+    """Print runtime configuration and resolved checkout paths as JSON."""
+    root = discover_project()
+    spec = evaluate(root, target, ctx.obj["runner"], with_derivation=False).spec
+    sources = resolve_mount_sources(
+        root, {mount.name: mount.source for mount in spec.mounts}
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "runtime": spec.to_runtime(),
+                "projectRoot": str(root),
+                "projectId": project_id(root),
+                "instanceName": spec.instance_name,
+                "instanceNameSource": "config",
+                "mountSources": {name: str(path) for name, path in sources.items()},
+            },
+            indent=2,
+        )
+    )

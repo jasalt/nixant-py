@@ -71,6 +71,36 @@ class MachineSpec:
     disk_bytes: int | None = None
     ports: tuple[PortSpec, ...] = ()
 
+    def to_runtime(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "kind": self.kind,
+            "instanceName": self.instance_name,
+            "user": {
+                "name": self.user.name,
+                "uid": self.user.uid,
+                "gid": self.user.gid,
+                "home": self.user.home,
+                "shell": self.user.shell,
+            },
+            "cpus": self.cpus,
+            "memoryBytes": self.memory_bytes,
+            "diskBytes": self.disk_bytes,
+            "mounts": {
+                mount.name: {
+                    "source": mount.source,
+                    "target": mount.target,
+                    "readOnly": mount.read_only,
+                }
+                for mount in self.mounts
+            },
+            "ports": [
+                {"host": port.host, "guest": port.guest, "address": port.address}
+                for port in self.ports
+            ],
+            "workdir": self.workdir,
+        }
+
     @classmethod
     def from_runtime(cls, data: Any) -> "MachineSpec":
         """Reject schema drift and malformed JSON at the evaluation boundary."""
