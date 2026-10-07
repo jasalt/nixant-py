@@ -100,8 +100,9 @@ def activate(
         # pending was written before any transfer; never overwrite it on interruption.
         if isinstance(exc, subprocess.TimeoutExpired):
             raise NixantError(
-                f"activation did not finish within {timeout}s; "
-                "aborted, run nixant up to retry"
+                f"activation did not finish within {timeout:g}s; aborted, run "
+                "nixant up to retry (a guest nixpkgs older than 26.05 can hang "
+                "here)"
             ) from exc
         raise NixantError("activation interrupted; run nixant up to retry") from exc
     except CommandError as exc:

@@ -92,6 +92,10 @@ def main(
     ctx.obj["runner"] = Runner(verbose=verbose)
 
 
+# A stuck switch-to-configuration never returns on its own (nixant-1va.3).
+DEFAULT_ACTIVATION_TIMEOUT = 1800.0
+
+
 def parse_duration(value: str | None) -> float | None:
     if value is None:
         return None
@@ -137,7 +141,7 @@ def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) 
 def _deploy(
     ctx: typer.Context, target: str, timeout: str | None, *, rebuild: bool
 ) -> None:
-    duration = parse_duration(timeout)
+    duration = parse_duration(timeout) or DEFAULT_ACTIVATION_TIMEOUT
     runner = ctx.obj["runner"]
     provider = IncusProvider(runner)
     root = discover_project()
@@ -243,7 +247,9 @@ def init(
 def up(
     ctx: typer.Context,
     target: str = typer.Argument("dev"),
-    timeout: str | None = typer.Option(None, help="Activation deadline, e.g. 5m."),
+    timeout: str | None = typer.Option(
+        None, help="Activation deadline, e.g. 5m (default 30m)."
+    ),
 ) -> None:
     """Build, start and activate the target environment."""
     _deploy(ctx, target, timeout, rebuild=False)

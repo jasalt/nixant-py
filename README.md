@@ -61,7 +61,7 @@ $ nixant name [NAME]     # give this checkout its own instance name (git config)
 $ nixant adopt           # attach an instance whose checkout moved
 ```
 
-Every command takes an optional target name (default `dev`). `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation.
+Every command takes an optional target name (default `dev`). `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation (default 30 minutes).
 
 - `up` and `rebuild` are the only commands that evaluate Nix. `shell`, `exec`, `down`, `destroy` and `status` find the instance by its `user.nixant.*` Incus metadata, so a broken or removed configuration never blocks cleanup.
 - `up` skips activation when the instance already runs the built system. `rebuild` never skips, so it is the explicit retry after a failed or degraded activation.

@@ -346,3 +346,8 @@ def test_restart_effect_changes_are_stored_and_announced(
     ops = [call.args[1].op for call in deploy["provider"].apply.call_args_list]
     assert "root-size" in ops
     assert "takes effect after the next restart" in result.output
+
+
+def test_activation_has_a_default_deadline(deploy: dict[str, Mock]) -> None:
+    assert CliRunner().invoke(app, ["up"]).exit_code == 0
+    assert deploy["activate"].call_args.kwargs["timeout"] == 1800
