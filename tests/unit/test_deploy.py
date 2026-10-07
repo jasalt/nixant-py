@@ -305,3 +305,21 @@ def test_up_replaces_renamed_mount(
     assert result.exit_code == 0, result.output
     assert "nixant-mount-workspace" not in running_deploy["devices"]
     assert "unrelated" in running_deploy["devices"]
+
+
+def test_up_uses_git_override_name(
+    deploy: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nixant.cli.get_override", Mock(return_value="shop-mine"))
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    assert deploy["resolve"].call_args.args[3] == "shop-mine"
+    assert deploy["resolve"].call_args.kwargs["name_source"] == "git override"
+    assert deploy["provider"].create.call_args.args[0].instance_name == "shop-mine"
+    assert deploy["provider"].start.call_args.args == ("shop-mine",)
+
+
+def test_up_without_override_uses_config_name(deploy: dict[str, Mock]) -> None:
+    assert CliRunner().invoke(app, ["up"]).exit_code == 0
+    assert deploy["resolve"].call_args.args[3] == "test-dev"
+    assert deploy["resolve"].call_args.kwargs["name_source"] == "config"

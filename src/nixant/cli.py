@@ -21,6 +21,13 @@ from nixant.init import (
     self_path,
 )
 from nixant.models import SCHEMA_VERSION, MachineSpec, MachineState
+from nixant.naming import (
+    get_override,
+    propose,
+    set_override,
+    unset_override,
+    validate_instance_name,
+)
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build, gcroot_path
 from nixant.nix.eval import evaluate
@@ -135,6 +142,9 @@ def _deploy(
     with target_lock(root, target):
         evaluated = evaluate(root, target, runner)
         spec = evaluated.spec
+        override = get_override(root, target, runner)
+        if override:
+            spec = replace(spec, instance_name=override)
         if spec.user.uid != os.getuid():
             raise NixantError(
                 f"set nixant.user.uid = {os.getuid()}; "
@@ -153,7 +163,14 @@ def _deploy(
             raise NixantError("VM support is not implemented yet")
         assert evaluated.drv_path is not None
         system = build(root, target, evaluated.drv_path, runner)
-        state = resolve(provider, root, target, spec.instance_name, kind=spec.kind)
+        state = resolve(
+            provider,
+            root,
+            target,
+            spec.instance_name,
+            kind=spec.kind,
+            name_source="git override" if override else "config",
+        )
         if rebuild:
             if state is None or state.status != "Running":
                 raise NixantError(
@@ -358,10 +375,22 @@ def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
 
 
 @app.command()
-def status(ctx: typer.Context, target: str | None = typer.Argument(None)) -> None:
+def status(
+    ctx: typer.Context,
+    target: str | None = typer.Argument(None),
+    orphans: bool = typer.Option(
+        False, "--orphans", help="List managed instances whose checkout is gone."
+    ),
+) -> None:
     """Show metadata and cached build status without evaluating Nix."""
-    root = discover_project()
     provider = IncusProvider(ctx.obj["runner"])
+    if orphans:
+        if target is not None:
+            raise UsageError("--orphans lists the whole host; do not pass a target")
+        _orphans(provider)
+        return
+    root = discover_project()
+    runner = ctx.obj["runner"]
     if target is not None:
         state = lookup(provider, root, target, require_schema=False)
         states = [state] if state else []
@@ -386,8 +415,13 @@ def status(ctx: typer.Context, target: str | None = typer.Argument(None)) -> Non
             if schema != str(SCHEMA_VERSION)
             else ""
         )
+        marker = (
+            " (override)"
+            if get_override(root, recorded_target, runner) == state.name
+            else ""
+        )
         typer.echo(
-            f"{state.name}  {state.status.upper()}  "
+            f"{state.name}{marker}  {state.status.upper()}  "
             f"{state.kind}  {' '.join(state.ipv4)}"
         )
         typer.echo(
@@ -397,11 +431,33 @@ def status(ctx: typer.Context, target: str | None = typer.Argument(None)) -> Non
         typer.echo(f"root: {state.config.get(PREFIX + 'root', 'unknown')}")
 
 
+def _orphans(provider: IncusProvider) -> None:
+    states = provider.find({PREFIX + "managed": "true"})
+    orphans = [
+        state
+        for state in states
+        if not Path(state.config.get(PREFIX + "root", "")).is_dir()
+    ]
+    if not orphans:
+        typer.echo("no orphaned instances")
+        return
+    for state in orphans:
+        typer.echo(
+            f"{state.name}  target: {state.config.get(PREFIX + 'target', '?')}  "
+            f"root: {state.config.get(PREFIX + 'root', 'unknown')}"
+        )
+    typer.echo(
+        "remove with `incus delete --force local:NAME`, "
+        "or run `nixant adopt` in the new checkout"
+    )
+
+
 @app.command("config")
 def show_config(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
     """Print runtime configuration and resolved checkout paths as JSON."""
     root = discover_project()
     spec = evaluate(root, target, ctx.obj["runner"], with_derivation=False).spec
+    override = get_override(root, target, ctx.obj["runner"])
     sources = resolve_mount_sources(
         root, {mount.name: mount.source for mount in spec.mounts}
     )
@@ -411,10 +467,48 @@ def show_config(ctx: typer.Context, target: str = typer.Argument("dev")) -> None
                 "runtime": spec.to_runtime(),
                 "projectRoot": str(root),
                 "projectId": project_id(root),
-                "instanceName": spec.instance_name,
-                "instanceNameSource": "config",
+                "instanceName": override or spec.instance_name,
+                "instanceNameSource": "git override" if override else "config",
                 "mountSources": {name: str(path) for name, path in sources.items()},
             },
             indent=2,
         )
     )
+
+
+@app.command()
+def name(
+    ctx: typer.Context,
+    target: str = typer.Argument("dev"),
+    new_name: str | None = typer.Argument(None, metavar="[NAME]"),
+    unset: bool = typer.Option(False, "--unset", help="Remove the override."),
+) -> None:
+    """Give this checkout its own instance name for a target."""
+    root = discover_project()
+    runner = ctx.obj["runner"]
+    if unset and new_name is not None:
+        raise UsageError("pass either NAME or --unset, not both")
+    provider = IncusProvider(runner)
+    with target_lock(root, target):
+        existing = lookup(provider, root, target, require_schema=False)
+        if existing is not None:
+            raise NixantError(
+                f"instance {existing.name} exists for target {target}; "
+                f"destroy it first, or keep the current name"
+            )
+        if unset:
+            scope = unset_override(root, target, runner)
+            typer.echo(
+                f"removed the {scope} override for {target}"
+                if scope
+                else f"no override set for {target}"
+            )
+            return
+        if new_name is None:
+            committed = evaluate(root, target, runner, with_derivation=False)
+            new_name = propose(committed.spec.instance_name, root)
+        validate_instance_name(new_name)
+        scope = set_override(root, target, new_name, runner)
+        typer.echo(
+            f"{target} now uses instance name {new_name} (git config, {scope} scope)"
+        )
