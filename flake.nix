@@ -31,6 +31,7 @@
       };
 
       nixosModules.container = import ./nix/modules/container.nix;
+      nixosModules.vm = import ./nix/modules/vm.nix;
       nixosModules.options = import ./nix/modules/options.nix;
 
       templates = {
@@ -57,6 +58,11 @@
         '';
         templates = pkgs.runCommand "nixant-template-tests" {
           results = builtins.toJSON (import ./nix/tests/templates.nix { inherit nixpkgs system; });
+        } ''
+          echo "$results" > "$out"
+        '';
+        vm = pkgs.runCommand "nixant-vm-tests" {
+          results = builtins.toJSON (import ./nix/tests/vm.nix { inherit nixpkgs system; });
         } ''
           echo "$results" > "$out"
         '';
