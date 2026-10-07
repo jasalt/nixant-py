@@ -7,6 +7,7 @@ import shlex
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from nixant.errors import CommandError, NixantError, UsageError
 from nixant.project import in_git_work_tree
@@ -44,6 +45,38 @@ def self_path(environ: Mapping[str, str]) -> Path:
 def input_url(environ: Mapping[str, str], flake: Path) -> str:
     """The canonical URL when the package declares one, else this CLI's own source."""
     return environ.get("NIXANT_FLAKE_URL") or f"path:{flake}"
+
+
+def pin_url(url: str, revision: str) -> str:
+    """Pin a flake URL to one revision according to its scheme."""
+    parts = urlsplit(url)
+    scheme = parts.scheme
+    if scheme in ("github", "gitlab", "sourcehut"):
+        # Path form owner/repo[/ref-or-rev]; the revision replaces any ref.
+        segments = parts.path.split("/")
+        if len(segments) < 2 or not all(segments[:2]):
+            raise UsageError(
+                f"cannot pin NIXANT_FLAKE_URL {url!r}: expected owner/repo"
+            )
+        return urlunsplit(
+            parts._replace(path="/".join([*segments[:2], revision]), fragment="")
+        )
+    if scheme.startswith(("git+", "hg+")) or scheme == "git":
+        query = [
+            (k, v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k != "rev"
+        ]
+        query.append(("rev", revision))
+        return urlunsplit(
+            parts._replace(
+                query=urlencode(query, quote_via=quote, safe="/"), fragment=""
+            )
+        )
+    raise UsageError(
+        f"cannot pin NIXANT_FLAKE_URL {url!r}: supported schemes are "
+        "github:, gitlab:, sourcehut:, git+*:// and hg+*://"
+    )
 
 
 def list_templates(flake: Path, runner: Runner) -> dict[str, str]:
@@ -105,6 +138,8 @@ def init_project(
     check_template(templates, template)
     name = propose_instance_name(directory)
     url = input_url(environ, flake)
+    if environ.get("NIXANT_FLAKE_URL") and environ.get("NIXANT_REV"):
+        pin_url(url, environ["NIXANT_REV"])  # fail before writing anything
 
     if (directory / "flake.nix").exists():
         snippet = flake / "nix/snippets" / f"{template}.nix"
@@ -165,7 +200,7 @@ def _lock(
     command = ["nix", "flake", "lock"]
     pinned = bool(environ.get("NIXANT_FLAKE_URL")) and bool(revision)
     if pinned:
-        command += ["--override-input", "nixant", f"{url}/{revision}"]
+        command += ["--override-input", "nixant", pin_url(url, revision)]
     elif environ.get("NIXANT_FLAKE_URL"):
         print(
             "warning: this build has no revision; the project is pinned to the "
