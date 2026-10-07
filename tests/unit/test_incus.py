@@ -8,6 +8,7 @@ import pytest
 
 from nixant.errors import CommandError, NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec
+from nixant.planner import Change, Effect
 from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
@@ -373,3 +374,124 @@ def test_find_rejects_malformed_responses(
     provider.runner.run.return_value = response(data)
     with pytest.raises(NixantError, match="invalid Incus"):
         provider.find({"user.nixant.managed": "true"})
+
+
+@pytest.mark.parametrize(
+    ("change", "argv"),
+    [
+        (
+            Change("cpus", Effect.LIVE, "", "config", "limits.cpu", {"value": "2"}),
+            ["config", "set", "local:dev", "limits.cpu=2"],
+        ),
+        (
+            Change(
+                "ports",
+                Effect.LIVE,
+                "",
+                "device-add",
+                "nixant-port-8080",
+                {"listen": "tcp:127.0.0.1:8080", "connect": "tcp:127.0.0.1:80"},
+            ),
+            [
+                "config",
+                "device",
+                "add",
+                "local:dev",
+                "nixant-port-8080",
+                "proxy",
+                "listen=tcp:127.0.0.1:8080",
+                "connect=tcp:127.0.0.1:80",
+            ],
+        ),
+        (
+            Change(
+                "mounts",
+                Effect.LIVE,
+                "",
+                "device-add",
+                "nixant-mount-a",
+                {"path": "/a"},
+            ),
+            [
+                "config",
+                "device",
+                "add",
+                "local:dev",
+                "nixant-mount-a",
+                "disk",
+                "path=/a",
+            ],
+        ),
+        (
+            Change(
+                "mounts",
+                Effect.LIVE,
+                "",
+                "device-set",
+                "nixant-mount-a",
+                {"readonly": "true"},
+            ),
+            ["config", "device", "set", "local:dev", "nixant-mount-a", "readonly=true"],
+        ),
+        (
+            Change("mounts", Effect.LIVE, "", "device-remove", "nixant-mount-a"),
+            ["config", "device", "remove", "local:dev", "nixant-mount-a"],
+        ),
+        (
+            Change(
+                "disk",
+                Effect.LIVE,
+                "",
+                "root-size",
+                "root",
+                {"size": "99", "local": ""},
+            ),
+            ["config", "device", "override", "local:dev", "root", "size=99"],
+        ),
+        (
+            Change(
+                "disk",
+                Effect.LIVE,
+                "",
+                "root-size",
+                "root",
+                {"size": "99", "local": "true"},
+            ),
+            ["config", "device", "set", "local:dev", "root", "size=99"],
+        ),
+    ],
+)
+def test_apply_change(provider: IncusProvider, change: Change, argv: list[str]) -> None:
+    provider.apply("dev", change)
+    provider.runner.run.assert_called_once_with(["incus", *argv])
+
+
+def test_apply_rejects_unknown_operation(provider: IncusProvider) -> None:
+    with pytest.raises(NixantError, match="unknown change"):
+        provider.apply("dev", Change("x", Effect.LIVE, "", "explode"))
+
+
+@pytest.mark.parametrize(
+    ("driver", "fails"), [("dir", True), ("btrfs", False), ("zfs", False)]
+)
+def test_check_quota_by_driver(
+    provider: IncusProvider, driver: str, fails: bool
+) -> None:
+    provider.runner.run.return_value = response({"driver": driver})
+    if fails:
+        with pytest.raises(NixantError, match="driver dir"):
+            provider.check_quota("default")
+    else:
+        provider.check_quota("default")
+    provider.runner.run.assert_called_once_with(
+        ["incus", "query", "local:/1.0/storage-pools/default"], capture=True
+    )
+
+
+def test_check_quota_reads_default_profile_pool(provider: IncusProvider) -> None:
+    provider.runner.run.side_effect = [
+        response({"devices": {"root": {"pool": "tank"}}}),
+        response({"driver": "zfs"}),
+    ]
+    provider.check_quota(None)
+    assert provider.runner.run.call_args_list[1].args[0][-1].endswith("/tank")

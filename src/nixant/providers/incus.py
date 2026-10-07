@@ -11,9 +11,8 @@ from urllib.parse import quote
 
 from nixant.errors import CommandError, NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec
+from nixant.planner import MOUNT_PREFIX, PORT_PREFIX, Change
 from nixant.run import Runner
-
-MOUNT_PREFIX = "nixant-mount-"
 
 
 def _local(name: str) -> str:
@@ -32,6 +31,7 @@ def _state(data: Any) -> MachineState:
             config=data["config"],
             devices=data["devices"],
             created_at=data.get("created_at", ""),
+            expanded_devices=data.get("expanded_devices") or {},
             ipv4=tuple(
                 address["address"]
                 for interface in network.values()
@@ -164,17 +164,71 @@ class IncusProvider:
             f"readonly={'true' if mount.read_only else 'false'}",
         ]
 
-    def remove_mount(self, name: str, mount_name: str) -> None:
-        self.runner.run(
-            [
-                "incus",
-                "config",
-                "device",
-                "remove",
-                _local(name),
-                f"{MOUNT_PREFIX}{mount_name}",
-            ]
+    def apply(self, name: str, change: Change) -> None:
+        """Run one planned change; the planner has already decided it is live."""
+        target = _local(name)
+        values = [f"{key}={value}" for key, value in change.values.items()]
+        if change.op == "config":
+            self.runner.run(
+                [
+                    "incus",
+                    "config",
+                    "set",
+                    target,
+                    f"{change.key}={change.values['value']}",
+                ]
+            )
+        elif change.op == "device-add":
+            kind = "proxy" if change.key.startswith(PORT_PREFIX) else "disk"
+            self.runner.run(
+                ["incus", "config", "device", "add", target, change.key, kind, *values]
+            )
+        elif change.op == "device-set":
+            self.runner.run(
+                ["incus", "config", "device", "set", target, change.key, *values]
+            )
+        elif change.op == "device-remove":
+            self.runner.run(["incus", "config", "device", "remove", target, change.key])
+        elif change.op == "root-size":
+            # Only the size key of the instance-local root device is ever touched.
+            verb = "set" if change.values.get("local") else "override"
+            self.runner.run(
+                [
+                    "incus",
+                    "config",
+                    "device",
+                    verb,
+                    target,
+                    "root",
+                    f"size={change.values['size']}",
+                ]
+            )
+        else:
+            raise NixantError(f"unknown change operation {change.op!r}")
+
+    def check_quota(self, pool: str | None) -> None:
+        """Fail before applying a disk size the root pool cannot enforce."""
+        if pool is None:
+            profile = _json(
+                self.runner.run(
+                    ["incus", "query", "local:/1.0/profiles/default"], capture=True
+                ).stdout
+            )
+            pool = (profile.get("devices") or {}).get("root", {}).get("pool")
+        if not isinstance(pool, str) or not pool:
+            raise NixantError("cannot determine the root storage pool for nixant.disk")
+        info = _json(
+            self.runner.run(
+                ["incus", "query", f"local:/1.0/storage-pools/{quote(pool, safe='')}"],
+                capture=True,
+            ).stdout
         )
+        driver = info.get("driver") if isinstance(info, dict) else None
+        if driver == "dir":
+            raise NixantError(
+                f"nixant.disk is not supported on storage pool {pool} (driver dir); "
+                "unset it or use a btrfs/zfs/lvm pool"
+            )
 
     def ensure_mount(
         self, name: str, mount: MountSpec, *, verify: bool = False

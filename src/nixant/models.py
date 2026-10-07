@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
@@ -20,6 +20,7 @@ class MachineState:
     devices: Mapping[str, Mapping[str, str]]
     ipv4: tuple[str, ...] = ()
     created_at: str = ""
+    expanded_devices: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "config", MappingProxyType(dict(self.config)))
@@ -30,6 +31,16 @@ class MachineState:
                 {
                     name: MappingProxyType(dict(device))
                     for name, device in self.devices.items()
+                }
+            ),
+        )
+        object.__setattr__(
+            self,
+            "expanded_devices",
+            MappingProxyType(
+                {
+                    name: MappingProxyType(dict(device))
+                    for name, device in self.expanded_devices.items()
                 }
             ),
         )

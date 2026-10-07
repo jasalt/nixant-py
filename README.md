@@ -65,6 +65,25 @@ Every command takes an optional target name (default `dev`). `-v/--verbose` prin
 - `status` reports, per instance, the Incus state, IPv4 addresses, activation result, whether the recorded system is `current` or `outdated` against the host GC root, and any schema mismatch.
 - `config` evaluates the target without building and prints JSON.
 
+## Machine settings
+
+`nixant up` reconciles these outer settings with the instance (and `rebuild` warns when they differ):
+
+```nix
+nixant = {
+  cpus = 2;                     # limits.cpu, applied live
+  memory = "4GiB";              # limits.memory, applied live
+  disk = "40GiB";               # root disk size, grow only
+  ports = [ { host = 8080; guest = 80; } ];   # proxy to 127.0.0.1 unless `address` is set
+  mounts.data = { source = "/srv/data"; target = "/data"; readOnly = true; };
+};
+```
+
+- Only `nixant-` devices, the limit keys, and the `size` key of the instance's own `root` device are touched. Profiles and other devices are never modified.
+- Leaving `cpus`, `memory` or `disk` as `null` keeps whatever the instance has.
+- Shrinking `disk` is refused. A storage pool that cannot enforce quotas (driver `dir`) is refused before anything is created.
+- Mounts and ports that disappear from the configuration are removed from the instance.
+
 ## `exec` environment caveats
 
 `exec` runs the command through `bash -lc` as the guest user, whatever that user's interactive shell is. The login bash sources `/etc/profile`, so the NixOS environment and `/run/wrappers/bin` are on `PATH`. Settings defined only in a non-bash shell configuration, such as fish-only variables, do not apply to `exec`. `shell` starts the user's configured login shell, so bash, zsh and fish all start as login shells.
@@ -94,7 +113,7 @@ On the host, only the latest build per target has a GC root.
 - Second checkout on the same host: the instance name comes from `nixant.instanceName`, so two checkouts of the same project collide. nixant refuses to operate on an instance owned by another checkout (`instance NAME belongs to /other/checkout`). Give the second checkout a different `instanceName` until `nixant name` exists.
 - Moving or renaming the checkout does not change the instance, but its recorded root path stays stale until `nixant adopt` exists.
 - Guest `nixos-rebuild switch` is not supported. After the first activation `/etc/nixos/configuration.nix` is a stub that fails with a message pointing back at `nixant rebuild`.
-- Phase 1 supports containers only. `cpus`, `memory`, `disk` and `ports` options are reserved for Phase 2.
+- Containers only for now; `nixant.kind = vm` is not implemented.
 - nixpkgs 26.05 or newer in the guest. Instances bootstrap from `images:nixos/unstable`, and only 26.05 and unstable images exist. Activating an older release (25.05 and 25.11 were tried) hangs: its `switch-to-configuration` stops `dbus-broker` and then loses its own D-Bus connection. The Nix modules reject older pins at evaluation time.
 
 ## Development

@@ -20,7 +20,7 @@ from nixant.init import (
     print_templates,
     self_path,
 )
-from nixant.models import SCHEMA_VERSION
+from nixant.models import SCHEMA_VERSION, MachineSpec, MachineState
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build, gcroot_path
 from nixant.nix.eval import evaluate
@@ -32,13 +32,14 @@ from nixant.ownership import (
     require_instance,
     resolve,
 )
+from nixant.planner import Change, Effect, plan
 from nixant.project import (
     discover_project,
     project_id,
     resolve_mount_sources,
     target_lock,
 )
-from nixant.providers.incus import MOUNT_PREFIX, IncusProvider
+from nixant.providers.incus import IncusProvider
 from nixant.readiness import wait_ready
 from nixant.run import Runner, check_host_tools
 
@@ -93,6 +94,37 @@ def parse_duration(value: str | None) -> float | None:
     return seconds
 
 
+def _apply(provider: IncusProvider, name: str, changes: list[Change]) -> None:
+    for change in changes:
+        typer.echo(f"{change.setting}: {change.summary}", err=True)
+        provider.apply(name, change)
+
+
+def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) -> None:
+    """Apply live changes now, restart-only ones when stopped, refuse the rest."""
+    changes = plan(spec, state)
+    blocked = [c for c in changes if c.effect in (Effect.RECREATE, Effect.UNSUPPORTED)]
+    if blocked:
+        raise NixantError(
+            "cannot apply configuration to existing instance:\n"
+            + "\n".join(f"  {c.setting}: {c.summary}" for c in blocked)
+        )
+    if any(c.op == "root-size" for c in changes):
+        provider.check_quota(state.expanded_devices.get("root", {}).get("pool"))
+    live = [c for c in changes if c.effect is Effect.LIVE]
+    later = [c for c in changes if c.effect is Effect.RESTART]
+    _apply(provider, spec.instance_name, live)
+    if state.status == "Stopped":
+        _apply(provider, spec.instance_name, later)
+    else:
+        for change in later:
+            typer.echo(
+                f"{change.setting}: {change.summary} needs a restart; "
+                "run nixant restart",
+                err=True,
+            )
+
+
 def _deploy(
     ctx: typer.Context, target: str, timeout: str | None, *, rebuild: bool
 ) -> None:
@@ -119,15 +151,6 @@ def _deploy(
         )
         if spec.kind != "container":
             raise NixantError("VM support is not implemented yet")
-        if (
-            spec.cpus is not None
-            or spec.memory_bytes is not None
-            or spec.disk_bytes is not None
-            or spec.ports
-        ):
-            raise NixantError(
-                "CPU/memory/disk limits and ports require Phase 2 support"
-            )
         assert evaluated.drv_path is not None
         system = build(root, target, evaluated.drv_path, runner)
         state = resolve(provider, root, target, spec.instance_name, kind=spec.kind)
@@ -136,21 +159,23 @@ def _deploy(
                 raise NixantError(
                     f"instance {spec.instance_name} is not running; run nixant up"
                 )
-            for mount in spec.mounts:
-                actual = state.devices.get(f"nixant-mount-{mount.name}", {})
-                if (
-                    actual.get("source") != mount.source
-                    or actual.get("path") != mount.target
-                    or (actual.get("readonly", "false") == "true") != mount.read_only
-                ):
-                    typer.echo(
-                        "warning: outer mount settings differ; run nixant up to apply",
-                        err=True,
-                    )
-                    break
+            outer = plan(spec, state)
+            if outer:
+                fields = ", ".join(sorted({change.setting for change in outer}))
+                typer.echo(
+                    f"warning: outer settings differ ({fields}); "
+                    "run nixant up to apply",
+                    err=True,
+                )
         else:
             if state is None:
+                if spec.disk_bytes is not None:
+                    provider.check_quota(None)
                 provider.create(spec, metadata(root, target))
+                state = provider.inspect(spec.instance_name)
+                if state is None:
+                    raise NixantError(f"instance {spec.instance_name} disappeared")
+                _reconcile(provider, spec, state)
                 provider.start(spec.instance_name)
             elif state.status not in ("Running", "Stopped", "Frozen"):
                 raise NixantError(
@@ -158,16 +183,8 @@ def _deploy(
                     f"has unsupported state {state.status}"
                 )
             else:
-                # Mounts dropped from the configuration must not stay attached;
-                # only devices nixant itself manages are considered.
-                wanted = {mount.name for mount in spec.mounts}
-                for device in sorted(state.devices):
-                    mount_name = device.removeprefix(MOUNT_PREFIX)
-                    if device.startswith(MOUNT_PREFIX) and mount_name not in wanted:
-                        provider.remove_mount(spec.instance_name, mount_name)
+                _reconcile(provider, spec, state)
                 if state.status != "Running":
-                    for mount in spec.mounts:
-                        provider.ensure_mount(spec.instance_name, mount)
                     provider.start(spec.instance_name)
         wait_ready(provider, spec.instance_name, spec.kind, verbose=runner.verbose)
         if not rebuild:

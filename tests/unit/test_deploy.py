@@ -38,7 +38,9 @@ def deploy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Mock]:
         mocks[name] = Mock(return_value=value)
         monkeypatch.setattr(f"nixant.cli.{name}", mocks[name])
     mocks["provider"] = Mock()
-    mocks["provider"].inspect.return_value = None
+    mocks["provider"].inspect.return_value = MachineState(
+        "test-dev", "Stopped", "container", {}, {}
+    )
     monkeypatch.setattr(
         "nixant.cli.IncusProvider", Mock(return_value=mocks["provider"])
     )
@@ -101,7 +103,7 @@ def test_rebuild_always_activates_without_mount_changes(
     deploy["can_skip"].return_value = True
     result = CliRunner().invoke(app, ["rebuild"])
     assert result.exit_code == 0, result.output
-    assert "outer mount settings differ" in result.output
+    assert "outer settings differ (mounts)" in result.output
     deploy["activate"].assert_called_once()
     deploy["can_skip"].assert_not_called()
     deploy["provider"].create.assert_not_called()
@@ -131,15 +133,56 @@ def test_eval_failure_before_incus(deploy: dict[str, Mock]) -> None:
     deploy["provider"].create.assert_not_called()
 
 
-def test_limits_not_silently_ignored(deploy: dict[str, Mock]) -> None:
+def test_limits_applied_to_new_instance_before_start(
+    deploy: dict[str, Mock],
+) -> None:
     original = deploy["evaluate"].return_value
     deploy["evaluate"].return_value = replace(
-        original, spec=replace(original.spec, cpus=2)
+        original, spec=replace(original.spec, cpus=2, memory_bytes=2**30)
+    )
+    events = Mock()
+    events.attach_mock(deploy["provider"], "provider")
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    keys = [
+        call.args[1].key
+        for call in deploy["provider"].apply.call_args_list
+        if call.args[1].op == "config"
+    ]
+    assert keys == ["limits.cpu", "limits.memory"]
+    names = [call[0] for call in events.mock_calls]
+    assert names.index("provider.create") < names.index("provider.apply")
+    assert names.index("provider.apply") < names.index("provider.start")
+
+
+def test_disk_checks_quota_before_creating(deploy: dict[str, Mock]) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, disk_bytes=2**30)
+    )
+    deploy["provider"].check_quota.side_effect = NixantError("driver dir")
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 1
+    deploy["provider"].create.assert_not_called()
+
+
+def test_shrink_is_refused_on_existing_instance(deploy: dict[str, Mock]) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, disk_bytes=2**30)
+    )
+    deploy["resolve"].return_value = MachineState(
+        "test-dev",
+        "Running",
+        "container",
+        {},
+        {},
+        expanded_devices={"root": {"type": "disk", "pool": "p", "size": "10GiB"}},
     )
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 1
-    assert "Phase 2" in result.output
-    deploy["build"].assert_not_called()
+    assert "cannot shrink" in result.output
+    deploy["provider"].apply.assert_not_called()
 
 
 @pytest.mark.parametrize(
