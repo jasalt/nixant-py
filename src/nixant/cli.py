@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 from dataclasses import replace
+from pathlib import Path
 from typing import Annotated, Any
 
 import click
@@ -12,6 +13,13 @@ import typer
 from typer.core import TyperGroup
 
 from nixant.errors import CommandError, NixantError, UsageError
+from nixant.init import (
+    DEFAULT_TEMPLATE,
+    init_project,
+    list_templates,
+    print_templates,
+    self_path,
+)
 from nixant.models import SCHEMA_VERSION
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build, gcroot_path
@@ -164,6 +172,20 @@ def _deploy(
         typer.echo(
             f"{spec.instance_name} ready ({target}) {addresses}; nixant shell {target}"
         )
+
+
+@app.command()
+def init(
+    ctx: typer.Context,
+    template: str = typer.Argument(DEFAULT_TEMPLATE),
+    list_: bool = typer.Option(False, "--list", help="List available templates."),
+) -> None:
+    """Create flake.nix and a role module in the current directory."""
+    runner = ctx.obj["runner"]
+    if list_:
+        print_templates(list_templates(self_path(os.environ), runner))
+        return
+    init_project(Path.cwd(), template, runner, IncusProvider(runner))
 
 
 @app.command()
