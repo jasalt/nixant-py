@@ -312,6 +312,34 @@ def down(
 
 
 @app.command()
+def restart(
+    ctx: typer.Context,
+    target: str = typer.Argument("dev"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Restart (or start) an owned environment without re-activating it."""
+    root = discover_project()
+    runner = ctx.obj["runner"]
+    provider = IncusProvider(runner)
+    with target_lock(root, target):
+        state = require_instance(lookup(provider, root, target, require_schema=False))
+        if state.status in ("Stopped", "Frozen"):
+            # Starting a frozen instance resumes it; a clean restart of one hangs.
+            provider.start(state.name)
+        if state.status != "Stopped":
+            try:
+                provider.restart(state.name, force=force)
+            except CommandError as exc:
+                raise NixantError(
+                    f"could not restart {state.name} within 60s; "
+                    f"run nixant restart {target} --force\n{exc}"
+                ) from exc
+        kind = "vm" if state.kind == "virtual-machine" else "container"
+        wait_ready(provider, state.name, kind, verbose=runner.verbose)
+        typer.echo(f"{state.name}: restarted")
+
+
+@app.command()
 def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
     """Delete an owned environment and its disposable host GC root."""
     root = discover_project()

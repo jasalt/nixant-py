@@ -32,6 +32,10 @@ def test_happy_path(project: Project) -> None:
     assert project.exec("cat", "/etc/nixant-marker").stdout == "v2"
     assert instance_created_at(project.instance) == created
 
+    project.nixant("restart")
+    assert project.exec("hostname").stdout.strip() == project.instance
+    assert project.exec("cat", "/etc/nixant-marker").stdout == "v2"
+
     project.nixant("down")
     assert "STOPPED" in project.nixant("status").stdout.upper()
     project.nixant("up")

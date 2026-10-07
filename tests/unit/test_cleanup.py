@@ -78,3 +78,56 @@ def test_destroy_refuses_owner_mismatch(cleanup: tuple) -> None:
     lookup.side_effect = NixantError("belongs to another target")
     assert CliRunner().invoke(app, ["destroy"]).exit_code == 1
     provider.destroy.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("status", "start", "restart"),
+    [
+        ("Stopped", True, False),
+        ("Frozen", True, True),
+        ("Running", False, True),
+    ],
+)
+def test_restart_states(
+    cleanup: tuple,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    start: bool,
+    restart: bool,
+) -> None:
+    lookup, provider, _ = cleanup
+    ready = Mock(return_value="running")
+    monkeypatch.setattr("nixant.cli.wait_ready", ready)
+    lookup.return_value = MachineState("owned", status, "container", {}, {})
+    result = CliRunner().invoke(app, ["restart"])
+    assert result.exit_code == 0, result.output
+    assert provider.start.called == start
+    assert provider.restart.called == restart
+    assert lookup.call_args.kwargs["require_schema"] is False
+    ready.assert_called_once()
+    assert ready.call_args.args[:3] == (provider, "owned", "container")
+    if status == "Frozen":
+        assert [c[0] for c in provider.mock_calls[:2]] == ["start", "restart"]
+
+
+def test_restart_force_and_timeout_hint(
+    cleanup: tuple, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lookup, provider, _ = cleanup
+    monkeypatch.setattr("nixant.cli.wait_ready", Mock())
+    provider.restart.side_effect = CommandError(["incus", "restart"], 1)
+    result = CliRunner().invoke(app, ["restart"])
+    assert result.exit_code == 1
+    assert "nixant restart dev --force" in result.output
+    provider.restart.side_effect = None
+    assert CliRunner().invoke(app, ["restart", "--force"]).exit_code == 0
+    provider.restart.assert_called_with("owned", force=True)
+
+
+def test_restart_requires_instance(cleanup: tuple) -> None:
+    lookup, provider, _ = cleanup
+    lookup.return_value = None
+    result = CliRunner().invoke(app, ["restart"])
+    assert result.exit_code == 1
+    assert "run nixant up" in result.output
+    provider.restart.assert_not_called()
