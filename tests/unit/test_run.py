@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -110,3 +111,97 @@ def test_missing_host_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", "")
     with pytest.raises(NixantError, match="incus, nix, git"):
         check_host_tools()
+
+
+@pytest.fixture
+def children(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subprocess.Popen]]:
+    """Keep real children observable and reap them even if a test assertion fails."""
+    processes = []
+    real_popen = subprocess.Popen
+
+    def track(*args, **kwargs):
+        child = real_popen(*args, **kwargs)
+        processes.append(child)
+        return child
+
+    monkeypatch.setattr("nixant.run.subprocess.Popen", track)
+    yield processes
+    for child in processes:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+
+
+@pytest.mark.parametrize("mode", ["tee", "pipe"])
+def test_timeout_kills_and_reaps_child(
+    children: list[subprocess.Popen], mode: str
+) -> None:
+    argv = [sys.executable, "-c", "import time; time.sleep(60)"]
+    with pytest.raises(subprocess.TimeoutExpired):
+        if mode == "tee":
+            Runner().run(argv, tee_stderr=True, timeout=0.02)
+        else:
+            with Runner().pipe(argv, timeout=0.02):
+                pass
+    assert len(children) == 1
+    child = children[0]
+    assert child.returncode is not None and child.returncode < 0
+    stream = child.stderr if mode == "tee" else child.stdout
+    assert stream is not None and stream.closed
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("consumer failed"), KeyboardInterrupt()]
+)
+def test_pipe_consumer_exception_reaps_child(
+    children: list[subprocess.Popen], error: BaseException
+) -> None:
+    with (
+        pytest.raises(type(error)),
+        Runner().pipe([sys.executable, "-c", "import time; time.sleep(60)"]),
+    ):
+        raise error
+    assert len(children) == 1
+    assert children[0].returncode is not None and children[0].returncode < 0
+    assert children[0].stdout.closed
+
+
+def test_tee_interrupt_kills_and_reaps_child(
+    children: list[subprocess.Popen], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracked_popen = subprocess.Popen
+
+    def interrupt_on_wait(*args, **kwargs):
+        child = tracked_popen(*args, **kwargs)
+        real_wait = child.wait
+
+        def interrupt(timeout=None):
+            monkeypatch.setattr(child, "wait", real_wait)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(child, "wait", interrupt)
+        return child
+
+    monkeypatch.setattr("nixant.run.subprocess.Popen", interrupt_on_wait)
+    with pytest.raises(KeyboardInterrupt):
+        Runner().run(
+            [sys.executable, "-c", "import time; time.sleep(60)"], tee_stderr=True
+        )
+    assert children[0].returncode is not None and children[0].returncode < 0
+    assert children[0].stderr.closed
+
+
+def test_tee_rejects_stdout_capture_before_spawning(
+    children: list[subprocess.Popen],
+) -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        Runner().run([sys.executable, "-c", "pass"], tee_stderr=True, capture=True)
+    assert children == []
+
+
+def test_pipe_missing_executable() -> None:
+    with (
+        pytest.raises(NixantError, match="could not run"),
+        Runner().pipe(["/nonexistent/nixant-test"]),
+    ):
+        pytest.fail("missing producer must not yield a stream")

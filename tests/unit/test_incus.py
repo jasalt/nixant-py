@@ -222,3 +222,154 @@ def test_metadata_scope(provider: IncusProvider) -> None:
     with pytest.raises(NixantError, match="non-nixant"):
         provider.set_metadata("dev", {"security.privileged": "true"})
     provider.runner.run.assert_not_called()
+
+
+@pytest.mark.parametrize("omit_readonly", [False, True])
+def test_matching_mount_is_not_mutated(
+    provider: IncusProvider, tmp_path: Path, omit_readonly: bool
+) -> None:
+    device = {
+        "type": "disk",
+        "source": str(tmp_path),
+        "path": "/workspace",
+        "shift": "true",
+    }
+    if not omit_readonly:
+        device["readonly"] = "false"
+    provider.inspect = Mock(
+        return_value=MachineState(
+            "dev", "Running", "container", {}, {"nixant-mount-workspace": device}
+        )
+    )
+    provider.run = Mock(
+        return_value=subprocess.CompletedProcess(
+            [], 0, b"source /workspace none rw 0 0\n"
+        )
+    )
+    provider.ensure_mount(
+        "dev", MountSpec("workspace", str(tmp_path), "/workspace"), verify=True
+    )
+    provider.runner.run.assert_not_called()
+    provider.run.assert_called_once_with("dev", ["cat", "/proc/mounts"], capture=True)
+
+
+@pytest.mark.parametrize(
+    ("key", "old_value"),
+    [
+        ("source", "/old-checkout"),
+        ("path", "/old-workspace"),
+        ("readonly", "true"),
+        ("shift", "false"),
+    ],
+)
+def test_changed_mount_updates_existing_device(
+    provider: IncusProvider, tmp_path: Path, key: str, old_value: str
+) -> None:
+    device = {
+        "type": "disk",
+        "source": str(tmp_path),
+        "path": "/workspace",
+        "readonly": "false",
+        "shift": "true",
+    }
+    device[key] = old_value
+    provider.inspect = Mock(
+        return_value=MachineState(
+            "dev", "Running", "container", {}, {"nixant-mount-workspace": device}
+        )
+    )
+    provider.ensure_mount("dev", MountSpec("workspace", str(tmp_path), "/workspace"))
+    provider.runner.run.assert_called_once_with(
+        [
+            "incus",
+            "config",
+            "device",
+            "set",
+            "local:dev",
+            "nixant-mount-workspace",
+            f"source={tmp_path}",
+            "path=/workspace",
+            "shift=true",
+            "readonly=false",
+        ]
+    )
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_mount_rejects_missing_instance_or_wrong_device_type(
+    provider: IncusProvider, tmp_path: Path, missing: bool
+) -> None:
+    provider.inspect = Mock(
+        return_value=None
+        if missing
+        else MachineState(
+            "dev",
+            "Running",
+            "container",
+            {},
+            {"nixant-mount-workspace": {"type": "nic"}},
+        )
+    )
+    with pytest.raises(
+        NixantError, match="disappeared" if missing else "not a disk device"
+    ):
+        provider.ensure_mount(
+            "dev", MountSpec("workspace", str(tmp_path), "/workspace")
+        )
+    provider.runner.run.assert_not_called()
+
+
+@pytest.mark.parametrize("source", ["relative", "/nonexistent/nixant-mount-test"])
+def test_create_validates_mounts_before_mutation(
+    provider: IncusProvider, source: str
+) -> None:
+    spec = MachineSpec.from_runtime(
+        json.loads((Path(__file__).parents[2] / "nix/tests/runtime.json").read_text())
+    )
+    spec = replace(spec, mounts=(MountSpec("workspace", source, "/workspace"),))
+    with pytest.raises(NixantError, match="existing absolute source"):
+        provider.create(spec, {"user.nixant.managed": "true"})
+    provider.runner.run.assert_not_called()
+
+
+def test_set_metadata_uses_one_literal_command(provider: IncusProvider) -> None:
+    provider.set_metadata(
+        "dev",
+        {
+            "user.nixant.workdir": "/work space; $(false)",
+            "user.nixant.activation": "ok",
+        },
+    )
+    provider.runner.run.assert_called_once_with(
+        [
+            "incus",
+            "config",
+            "set",
+            "local:dev",
+            "user.nixant.activation=ok",
+            "user.nixant.workdir=/work space; $(false)",
+        ]
+    )
+
+
+def test_empty_metadata_does_not_run_command(provider: IncusProvider) -> None:
+    provider.set_metadata("dev", {})
+    provider.runner.run.assert_not_called()
+
+
+@pytest.mark.parametrize("raw", [b"not JSON", b"null", b"{}", b"[]"])
+def test_inspect_rejects_malformed_responses(
+    provider: IncusProvider, raw: bytes
+) -> None:
+    provider.runner.run.return_value = subprocess.CompletedProcess([], 0, raw)
+    with pytest.raises(NixantError, match="invalid Incus"):
+        provider.inspect("dev")
+
+
+@pytest.mark.parametrize("data", [{}, None, [{}]])
+def test_find_rejects_malformed_responses(
+    provider: IncusProvider, data: object
+) -> None:
+    provider.runner.run.return_value = response(data)
+    with pytest.raises(NixantError, match="invalid Incus"):
+        provider.find({"user.nixant.managed": "true"})

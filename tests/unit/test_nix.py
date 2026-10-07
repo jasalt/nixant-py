@@ -138,3 +138,86 @@ def test_bad_build_response(
     )
     with pytest.raises(NixantError, match="invalid Nix build response"):
         build(tmp_path, "dev", DRV, runner)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("user", "name"), "root"),
+        (("user", "name"), ""),
+        (("user", "name"), "dev\0root"),
+        (("user", "uid"), 0),
+        (("user", "uid"), True),
+        (("user", "gid"), -1),
+        (("user", "home"), "relative"),
+        (("user", "shell"), None),
+        (("mounts", "workspace", "readOnly"), "false"),
+        (("mounts", "workspace", "source"), ""),
+    ],
+)
+def test_invalid_nested_runtime(runtime: dict, path: tuple, value: object) -> None:
+    parent = runtime
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = value
+    with pytest.raises(NixantError, match="invalid nixant runtime"):
+        MachineSpec.from_runtime(runtime)
+
+
+@pytest.mark.parametrize("data", [None, [], "runtime"])
+def test_runtime_requires_object(data: object) -> None:
+    with pytest.raises(NixantError, match="expected an object"):
+        MachineSpec.from_runtime(data)
+
+
+@pytest.mark.parametrize("port", [0, -1, True, "80", 65536])
+@pytest.mark.parametrize("field", ["host", "guest"])
+def test_invalid_runtime_ports(runtime: dict, field: str, port: object) -> None:
+    runtime["ports"] = [{"host": 8080, "guest": 80, "address": "127.0.0.1"}]
+    runtime["ports"][0][field] = port
+    with pytest.raises(NixantError, match="invalid nixant runtime"):
+        MachineSpec.from_runtime(runtime)
+
+
+def test_duplicate_runtime_mount_targets(runtime: dict) -> None:
+    runtime["mounts"]["other"] = dict(runtime["mounts"]["workspace"])
+    with pytest.raises(NixantError, match="mount targets must be unique"):
+        MachineSpec.from_runtime(runtime)
+
+
+def test_duplicate_runtime_host_ports(runtime: dict) -> None:
+    runtime["ports"] = [
+        {"host": 8080, "guest": guest, "address": "127.0.0.1"} for guest in (80, 81)
+    ]
+    with pytest.raises(NixantError, match="host ports must be unique"):
+        MachineSpec.from_runtime(runtime)
+
+
+def test_runtime_roundtrip_with_ports_and_readonly_mount(runtime: dict) -> None:
+    runtime["ports"] = [{"host": 65535, "guest": 1, "address": "127.0.0.1"}]
+    runtime["mounts"]["workspace"]["readOnly"] = True
+    spec = MachineSpec.from_runtime(runtime)
+    assert spec.ports[0].host == 65535
+    assert spec.ports[0].guest == 1
+    assert spec.mounts[0].read_only is True
+    assert spec.to_runtime() == runtime
+
+
+@pytest.mark.parametrize("raw", [b"not JSON", b"[]", b"{}", b"null"])
+def test_evaluate_rejects_malformed_response(tmp_path: Path, raw: bytes) -> None:
+    runner = runner_with(None)
+    runner.run.side_effect = [
+        subprocess.CompletedProcess([], 0, b"true\n"),
+        subprocess.CompletedProcess([], 0, b""),
+        subprocess.CompletedProcess([], 0, raw),
+    ]
+    with pytest.raises(NixantError, match="invalid Nix evaluation response"):
+        evaluate(tmp_path, "dev", runner)
+
+
+@pytest.mark.parametrize("drv", [None, "/tmp/system.drv", "--option"])
+def test_evaluate_rejects_invalid_derivation(
+    runtime: dict, tmp_path: Path, drv: object
+) -> None:
+    with pytest.raises(NixantError, match="invalid system derivation path"):
+        evaluate(tmp_path, "dev", runner_with({"runtime": runtime, "drvPath": drv}))
