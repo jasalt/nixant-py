@@ -361,3 +361,24 @@ def test_snapshot_and_restore(project: Project) -> None:
     project.nixant("snapshot", "safe", "--delete")
     assert "safe" not in project.nixant("snapshots").stdout
     assert project.nixant("restore", "safe", check=False).returncode != 0
+
+
+def test_ephemeral_instance_vanishes_on_down(project: Project) -> None:
+    uid = os.getuid()
+    project.write_module(f"{{ nixant.user.uid = {uid}; nixant.ephemeral = true; }}\n")
+    project.nixant("up")
+    info = json.loads(incus("query", f"/1.0/instances/{project.instance}").stdout)
+    assert info["ephemeral"] is True
+    assert "ephemeral" in project.nixant("status").stdout
+    project.nixant("snapshot", "s1")
+    down = project.nixant("down")
+    assert "deleted (ephemeral)" in down.stdout
+    assert not project.instance_exists()
+    project.nixant("up")
+    assert project.exec("hostname").stdout.strip() == project.instance
+
+    # The setting is fixed at creation; flipping it needs a new instance.
+    project.write_module(f"{{ nixant.user.uid = {uid}; }}\n")
+    refused = project.nixant("up", check=False)
+    assert refused.returncode != 0
+    assert "ephemeral" in refused.stderr + refused.stdout

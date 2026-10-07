@@ -196,3 +196,31 @@ def test_kind_mismatch_is_recreate(spec: MachineSpec) -> None:
 def test_wrong_device_type_is_unsupported(spec: MachineSpec) -> None:
     changes = plan(spec, state(devices={"nixant-mount-workspace": {"type": "nic"}}))
     assert [c.effect for c in changes] == [Effect.UNSUPPORTED]
+
+
+@pytest.mark.parametrize("wanted", [True, False])
+def test_ephemeral_mismatch_is_recreate(spec: MachineSpec, wanted: bool) -> None:
+    spec = replace(spec, ephemeral=wanted)
+    current = MachineState(
+        "dev",
+        "Running",
+        "container",
+        {},
+        {"nixant-mount-workspace": MOUNT},
+        ephemeral=not wanted,
+    )
+    changes = plan(spec, current)
+    assert [(c.setting, c.effect) for c in changes] == [("ephemeral", Effect.RECREATE)]
+
+
+def test_matching_ephemeral_is_no_change(spec: MachineSpec) -> None:
+    spec = replace(spec, ephemeral=True)
+    current = MachineState(
+        "dev",
+        "Running",
+        "container",
+        {},
+        {"nixant-mount-workspace": MOUNT},
+        ephemeral=True,
+    )
+    assert plan(spec, current) == []

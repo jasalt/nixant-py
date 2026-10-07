@@ -325,6 +325,11 @@ def down(
                 f"could not stop {state.name} within 60s; "
                 f"run nixant down {target} --force\n{exc}"
             ) from exc
+        if state.ephemeral:
+            # Incus deletes ephemeral instances on stop; drop the build cache too.
+            _remove_gcroot(root, target)
+            typer.echo(f"{state.name}: stopped and deleted (ephemeral)")
+            return
         typer.echo(f"{state.name}: stopped")
 
 
@@ -355,6 +360,13 @@ def restart(
         typer.echo(f"{state.name}: restarted")
 
 
+def _remove_gcroot(root: Path, target: str) -> None:
+    try:
+        gcroot_path(root, target).unlink(missing_ok=True)
+    except OSError as exc:
+        raise NixantError(f"cannot remove GC root: {exc}") from exc
+
+
 @app.command()
 def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
     """Delete an owned environment and its disposable host GC root."""
@@ -367,10 +379,7 @@ def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
         else:
             provider.destroy(state.name)
             typer.echo(f"{state.name}: destroyed")
-        try:
-            gcroot_path(root, target).unlink(missing_ok=True)
-        except OSError as exc:
-            raise NixantError(f"cannot remove GC root: {exc}") from exc
+        _remove_gcroot(root, target)
 
 
 @app.command()
@@ -421,6 +430,7 @@ def status(
         )
         typer.echo(
             f"{state.name}{marker}  {state.status.upper()}  "
+            f"{'ephemeral ' if state.ephemeral else ''}"
             f"{state.kind}  {' '.join(state.ipv4)}"
         )
         typer.echo(

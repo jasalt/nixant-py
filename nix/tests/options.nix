@@ -53,6 +53,7 @@ let
     badPort = rejects { nixant.ports = [{ host = 65536; guest = 80; }]; };
     duplicatePorts = rejects { nixant.ports = [ { host = 80; guest = 80; } { host = 80; guest = 81; } ]; };
     portDefault = (builtins.head (evaluate { nixant.ports = [{ host = 8080; guest = 80; }]; }).ports).address == "127.0.0.1";
+    ephemeral = (evaluate { nixant.ephemeral = true; }).ephemeral && !base.ephemeral;
     readOnly = rejects { nixant.runtime = {}; };
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))

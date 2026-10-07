@@ -533,3 +533,27 @@ def test_inspect_normalizes_instance_kind(
     )
     state = provider.inspect("dev")
     assert state is not None and state.kind == kind
+
+
+def test_create_ephemeral(provider: IncusProvider) -> None:
+    data = json.loads(
+        (Path(__file__).parents[2] / "nix/tests/runtime.json").read_text()
+    )
+    spec = replace(MachineSpec.from_runtime(data), mounts=(), ephemeral=True)
+    provider.create(spec, {})
+    assert "--ephemeral" in provider.runner.run.call_args.args[0]
+
+
+def test_inspect_reads_ephemeral_flag(provider: IncusProvider) -> None:
+    provider.runner.run.return_value = response(
+        {
+            "name": "dev",
+            "status": "Running",
+            "type": "container",
+            "config": {},
+            "devices": {},
+            "ephemeral": True,
+        }
+    )
+    state = provider.inspect("dev")
+    assert state is not None and state.ephemeral is True

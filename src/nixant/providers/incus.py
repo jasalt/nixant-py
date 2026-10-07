@@ -32,6 +32,7 @@ def _state(data: Any) -> MachineState:
             config=data["config"],
             devices=data["devices"],
             created_at=data.get("created_at", ""),
+            ephemeral=bool(data.get("ephemeral", False)),
             expanded_devices=data.get("expanded_devices") or {},
             ipv4=tuple(
                 address["address"]
@@ -96,6 +97,7 @@ class IncusProvider:
             "create",
             "images:nixos/unstable",
             _local(spec.instance_name),
+            *(["--ephemeral"] if spec.ephemeral else []),
             # Nesting lets guest-side Nix sandbox builds work in containers; the
             # stock VM image declares secureboot incompatible.
             *(

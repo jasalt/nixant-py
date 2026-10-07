@@ -4,7 +4,7 @@ NixOS development environments on local [Incus](https://linuxcontainers.org/incu
 
 You describe an environment as a `nixosConfiguration` in your project's flake. nixant builds it on the host, transfers the closure into an Incus container and activates it, then gives you a shell inside. The project checkout is mounted into the guest, so editors and tools on the host keep working.
 
-> Status: containers and VMs. Ephemeral instances are not implemented yet.
+> Status: containers and VMs.
 
 ## Host requirements
 
@@ -86,6 +86,7 @@ nixant = {
 - Only `nixant-` devices, the limit keys, and the `size` key of the instance's own `root` device are touched. Profiles and other devices are never modified.
 - Leaving `cpus`, `memory` or `disk` as `null` keeps whatever the instance has.
 - Shrinking `disk` is refused. A storage pool that cannot enforce quotas (driver `dir`) is refused before anything is created.
+- `ephemeral = true` creates an Incus ephemeral instance: `nixant down` stops it and Incus deletes it (the next `up` builds a new one). The flag is fixed at creation; flipping it on an existing instance is refused until you destroy it.
 - Mounts and ports that disappear from the configuration are removed from the instance.
 
 ## Containers and VMs

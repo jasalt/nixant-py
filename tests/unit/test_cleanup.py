@@ -131,3 +131,19 @@ def test_restart_requires_instance(cleanup: tuple) -> None:
     assert result.exit_code == 1
     assert "run nixant up" in result.output
     provider.restart.assert_not_called()
+
+
+def test_down_deletes_gcroot_of_ephemeral_instance(cleanup: tuple) -> None:
+    lookup, provider, root = cleanup
+    from nixant.nix.build import gcroot_path
+
+    link = gcroot_path(root, "dev")
+    link.parent.mkdir(parents=True)
+    link.symlink_to("/nix/store/x-system")
+    lookup.return_value = MachineState(
+        "owned", "Running", "container", {}, {}, ephemeral=True
+    )
+    result = CliRunner().invoke(app, ["down"])
+    assert result.exit_code == 0, result.output
+    assert "deleted (ephemeral)" in result.output
+    assert not link.is_symlink()

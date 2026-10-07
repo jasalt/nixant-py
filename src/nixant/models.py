@@ -20,6 +20,7 @@ class MachineState:
     devices: Mapping[str, Mapping[str, str]]
     ipv4: tuple[str, ...] = ()
     created_at: str = ""
+    ephemeral: bool = False
     expanded_devices: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -88,6 +89,7 @@ class MachineSpec:
     memory_bytes: int | None = None
     disk_bytes: int | None = None
     ports: tuple[PortSpec, ...] = ()
+    ephemeral: bool = False
 
     def to_runtime(self) -> dict[str, Any]:
         return {
@@ -117,6 +119,7 @@ class MachineSpec:
                 for port in self.ports
             ],
             "workdir": self.workdir,
+            "ephemeral": self.ephemeral,
         }
 
     @classmethod
@@ -156,6 +159,7 @@ class MachineSpec:
                     for name, mount in data["mounts"].items()
                 ),
                 workdir=_absolute(data["workdir"]),
+                ephemeral=_boolean(data.get("ephemeral", False)),
                 cpus=_optional_integer(data["cpus"]),
                 memory_bytes=_optional_integer(data["memoryBytes"]),
                 disk_bytes=_optional_integer(data["diskBytes"]),

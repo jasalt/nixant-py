@@ -75,6 +75,11 @@ in {
       default.workspace = { source = "."; target = "/workspace"; };
     };
     workdir = mkOption { type = types.nullOr types.str; default = null; };
+    ephemeral = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Create the instance as ephemeral: Incus deletes it when it stops.";
+    };
     ports = mkOption { type = types.listOf portType; default = []; };
     runtime = mkOption {
       type = types.attrs;
@@ -88,7 +93,7 @@ in {
     nixant.runtime = if errors != [] then throw (lib.concatStringsSep "\n" errors) else {
       schemaVersion = 1;
       kind = if config.boot.isContainer then "container" else "vm";
-      inherit (cfg) instanceName cpus;
+      inherit (cfg) instanceName cpus ephemeral;
       memoryBytes = cfg.memory;
       diskBytes = cfg.disk;
       mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) cfg.mounts;

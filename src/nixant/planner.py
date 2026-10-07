@@ -120,6 +120,18 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
             )
         )
         return changes
+    if state.ephemeral != spec.ephemeral:
+        # Incus fixes this at creation; changing it means a new instance.
+        changes.append(
+            Change(
+                "ephemeral",
+                Effect.RECREATE,
+                f"instance is {'ephemeral' if state.ephemeral else 'persistent'}, "
+                f"configuration wants {'ephemeral' if spec.ephemeral else 'persistent'}"
+                "; destroy and recreate it",
+            )
+        )
+        return changes
     # CPU and memory limits apply live to containers and VMs alike.
     if spec.cpus is not None and state.config.get("limits.cpu") != str(spec.cpus):
         changes.append(

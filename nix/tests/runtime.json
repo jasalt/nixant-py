@@ -8,5 +8,6 @@
   "diskBytes": null,
   "mounts": {"workspace": {"source": ".", "target": "/workspace", "readOnly": false}},
   "ports": [],
-  "workdir": "/workspace"
+  "workdir": "/workspace",
+  "ephemeral": false
 }
