@@ -4,6 +4,7 @@ import socket
 import subprocess
 import time
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -257,3 +258,47 @@ def test_machine_settings_reconcile(project: Project, tmp_path: Path) -> None:
     assert refused.returncode != 0
     assert "cannot shrink" in refused.stderr + refused.stdout
     assert project.incus_config("limits.cpu") == "1"
+
+
+def test_adopt_after_checkout_moves(project: Project, tmp_path: Path) -> None:
+    project.nixant("up")
+    (project.root / "marker").write_text("kept")
+    moved = tmp_path / "moved"
+    project.root.rename(moved)
+    new = replace(project, root=moved)
+    assert project.instance in new.nixant("status", "--orphans").stdout
+    # The ownership check refuses the unrelated checkout until it is adopted.
+    assert new.nixant("exec", "--", "true", check=False).returncode != 0
+    new.nixant("adopt")
+    assert new.exec("cat", "/workspace/marker").stdout == "kept"
+    assert project.instance not in new.nixant("status", "--orphans").stdout
+    new.nixant("rebuild")
+    assert new.incus_config("user.nixant.root") == str(moved.resolve())
+    new.nixant("destroy")
+
+
+def test_name_override_gives_second_checkout_its_own_instance(
+    project: Project, tmp_path: Path
+) -> None:
+    project.nixant("up")
+    subprocess.run(["git", "add", "-A"], cwd=project.root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"],
+        cwd=project.root,
+        check=True,
+    )
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(project.root), clone], check=True)
+    second = replace(project, root=clone)
+    clash = second.nixant("up", check=False)
+    assert clash.returncode != 0
+    assert "nixant name dev" in clash.stderr + clash.stdout
+    chosen = f"{project.instance}-b"
+    second.created[:] = [chosen]
+    second.nixant("name", "dev", chosen)
+    second.nixant("up")
+    assert second.instance_exists(chosen)
+    assert project.instance_exists()
+    second.nixant("destroy")
+    assert not second.instance_exists(chosen)
+    assert project.instance_exists()

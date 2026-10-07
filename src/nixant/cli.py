@@ -12,6 +12,8 @@ import click
 import typer
 from typer.core import TyperGroup
 
+from nixant.adopt import adopt as adopt_instance
+from nixant.adopt import choose
 from nixant.errors import CommandError, NixantError, UsageError
 from nixant.init import (
     DEFAULT_TEMPLATE,
@@ -512,3 +514,24 @@ def name(
         typer.echo(
             f"{target} now uses instance name {new_name} (git config, {scope} scope)"
         )
+
+
+@app.command()
+def adopt(
+    ctx: typer.Context,
+    target: str = typer.Argument("dev"),
+    instance: str | None = typer.Option(
+        None, "--instance", help="Instance to adopt when several match."
+    ),
+) -> None:
+    """Attach an instance whose checkout moved to this checkout."""
+    root = discover_project()
+    provider = IncusProvider(ctx.obj["runner"])
+    with target_lock(root, target):
+        current = lookup(provider, root, target, require_schema=False)
+        if current is not None:
+            typer.echo(f"{current.name}: already belongs to this checkout")
+            return
+        state = choose(provider, root, target, instance)
+        adopt_instance(provider, root, target, state)
+        typer.echo(f"{state.name}: adopted by {root}")
