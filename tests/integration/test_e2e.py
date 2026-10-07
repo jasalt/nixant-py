@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 import socket
@@ -302,3 +303,41 @@ def test_name_override_gives_second_checkout_its_own_instance(
     second.nixant("destroy")
     assert not second.instance_exists(chosen)
     assert project.instance_exists()
+
+
+def test_vm_lifecycle_and_settings(vm_project: Project) -> None:
+    project = vm_project
+    project.nixant("up")
+    assert project.incus_config("user.nixant.activation") == "ok"
+    info = json.loads(incus("query", f"/1.0/instances/{project.instance}").stdout)
+    assert info["type"] == "virtual-machine"
+    assert project.exec("hostname").stdout.strip() == project.instance
+    project.exec("sudo", "true")
+    assert "wheel" in project.exec("id", "-Gn").stdout.split()
+    project.exec("touch", "/workspace/from-vm")
+    assert (project.root / "from-vm").exists()
+
+    # CPU and memory apply live; disk growth waits for a restart.
+    project.write_module(
+        f"{{ nixant.user.uid = {os.getuid()}; nixant.cpus = 2; "
+        'nixant.memory = "3GiB"; nixant.disk = "24GiB"; }\n'
+    )
+    changed = project.nixant("up")
+    assert "takes effect after the next restart" in changed.stderr
+    assert project.exec("nproc").stdout.strip() == "2"
+    project.nixant("restart")
+    size = project.exec("df", "--output=size", "-BG", "/").stdout.split()[-1]
+    assert int(size.removesuffix("G")) >= 20
+
+    # Ports cannot be forwarded to a VM; the error leaves the instance alone.
+    project.write_module(
+        f"{{ nixant.user.uid = {os.getuid()}; "
+        "nixant.ports = [ { host = 18080; guest = 80; } ]; }\n"
+    )
+    refused = project.nixant("up", check=False)
+    assert refused.returncode != 0
+    assert "NAT" in refused.stderr + refused.stdout
+
+    project.nixant("down")
+    project.nixant("destroy")
+    assert not project.instance_exists()

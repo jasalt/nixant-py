@@ -4,7 +4,7 @@ NixOS development environments on local [Incus](https://linuxcontainers.org/incu
 
 You describe an environment as a `nixosConfiguration` in your project's flake. nixant builds it on the host, transfers the closure into an Incus container and activates it, then gives you a shell inside. The project checkout is mounted into the guest, so editors and tools on the host keep working.
 
-> Status: containers only. VMs, snapshots and ephemeral instances are not implemented yet.
+> Status: containers and VMs. Snapshots and ephemeral instances are not implemented yet.
 
 ## Host requirements
 
@@ -87,6 +87,16 @@ nixant = {
 - Shrinking `disk` is refused. A storage pool that cannot enforce quotas (driver `dir`) is refused before anything is created.
 - Mounts and ports that disappear from the configuration are removed from the instance.
 
+## Containers and VMs
+
+A target is a container when it imports `nixant.nixosModules.container` and a VM when it imports `nixant.nixosModules.vm` (the stock Incus VM profile with `incus-agent` kept enabled). The kind of an existing instance cannot change; `up` refuses and asks you to destroy it first. VMs use `images:nixos/unstable` with `security.secureboot=false`, and get 180 seconds to become ready.
+
+VM differences, verified on Incus with virtiofs mounts:
+
+- CPU and memory limits and mounts (add, retarget, remove) apply to a running VM.
+- A larger `disk` is stored immediately but the guest only sees it after `nixant restart`.
+- `ports` are rejected: Incus only allows NAT-mode proxies on VMs, which need a static IPv4 address on the instance NIC that nixant does not manage.
+
 ## `exec` environment caveats
 
 `exec` runs the command through `bash -lc` as the guest user, whatever that user's interactive shell is. The login bash sources `/etc/profile`, so the NixOS environment and `/run/wrappers/bin` are on `PATH`. Settings defined only in a non-bash shell configuration, such as fish-only variables, do not apply to `exec`. `shell` starts the user's configured login shell, so bash, zsh and fish all start as login shells.
@@ -116,7 +126,6 @@ On the host, only the latest build per target has a GC root.
 - Second checkout on the same host: the instance name comes from `nixant.instanceName`, so two checkouts of the same project collide. nixant refuses to operate on an instance owned by another checkout (`instance NAME belongs to /other/checkout`). Run `nixant name dev` in the second checkout to store its own name in that checkout's git config (per worktree in a multi-worktree repository). The override is invisible to Nix, so the guest hostname keeps the committed name.
 - Moved checkouts: the instance keeps working under its old record until you run `nixant adopt` in the new location, which rewrites the recorded root and mount sources. `nixant status --orphans` lists instances whose checkout no longer exists.
 - Guest `nixos-rebuild switch` is not supported. After the first activation `/etc/nixos/configuration.nix` is a stub that fails with a message pointing back at `nixant rebuild`.
-- Containers only for now; `nixant.kind = vm` is not implemented.
 - nixpkgs 26.05 or newer in the guest. Instances bootstrap from `images:nixos/unstable`, and only 26.05 and unstable images exist. Activating an older release (25.05 and 25.11 were tried) hangs: its `switch-to-configuration` stops `dbus-broker` and then loses its own D-Bus connection. The Nix modules reject older pins at evaluation time.
 
 ## Development

@@ -89,7 +89,7 @@ def incus(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["incus", *args], capture_output=True, text=True, check=check)
 
 
-def new_project(tmp_path: Path, label: str) -> Project:
+def new_project(tmp_path: Path, label: str, *, vm: bool = False) -> Project:
     root = tmp_path / label
     root.mkdir()
     git(root, "init", "-q")
@@ -102,12 +102,23 @@ def new_project(tmp_path: Path, label: str) -> Project:
         f'nixant.instanceName = "{instance}";',
         flake,
     )
+    if vm:
+        flake = flake.replace("nixant.nixosModules.container", "nixant.nixosModules.vm")
     pinned = os.environ.get("NIXANT_IT_NIXPKGS")
     if pinned:  # e.g. github:NixOS/nixpkgs/nixos-26.05 to check the supported minimum
         flake = re.sub(r'nixpkgs\.url = "[^"]*";', f'nixpkgs.url = "{pinned}";', flake)
     (root / "flake.nix").write_text(flake)
     project.write_module(f"{{ nixant.user.uid = {os.getuid()}; }}\n", name="extra")
     return project
+
+
+@pytest.fixture
+def vm_project(tmp_path: Path) -> Iterator[Project]:
+    project = new_project(tmp_path, "vmproject", vm=True)
+    try:
+        yield project
+    finally:
+        cleanup(project)
 
 
 @pytest.fixture

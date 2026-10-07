@@ -323,3 +323,26 @@ def test_up_without_override_uses_config_name(deploy: dict[str, Mock]) -> None:
     assert CliRunner().invoke(app, ["up"]).exit_code == 0
     assert deploy["resolve"].call_args.args[3] == "test-dev"
     assert deploy["resolve"].call_args.kwargs["name_source"] == "config"
+
+
+def test_restart_effect_changes_are_stored_and_announced(
+    deploy: dict[str, Mock],
+) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, kind="vm", disk_bytes=2**34)
+    )
+    deploy["resolve"].return_value = MachineState(
+        "test-dev",
+        "Running",
+        "vm",
+        {},
+        {"nixant-mount-workspace": {"type": "disk"}},
+        expanded_devices={"root": {"type": "disk", "pool": "p", "size": "10GiB"}},
+    )
+    deploy["can_skip"].return_value = True
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    ops = [call.args[1].op for call in deploy["provider"].apply.call_args_list]
+    assert "root-size" in ops
+    assert "takes effect after the next restart" in result.output

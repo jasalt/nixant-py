@@ -110,7 +110,7 @@ def _device_changes(
 
 def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
     changes: list[Change] = []
-    if state.kind != ("virtual-machine" if spec.kind == "vm" else spec.kind):
+    if state.kind != spec.kind:
         changes.append(
             Change(
                 "kind",
@@ -120,7 +120,7 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
             )
         )
         return changes
-    # Config and root-disk limits apply live to containers and VMs alike.
+    # CPU and memory limits apply live to containers and VMs alike.
     if spec.cpus is not None and state.config.get("limits.cpu") != str(spec.cpus):
         changes.append(
             Change(
@@ -146,8 +146,7 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
                 )
             )
     if spec.disk_bytes is not None:
-        changes.extend(_disk(spec.disk_bytes, state))
-    mount_effect = Effect.RESTART if spec.kind == "vm" else Effect.LIVE
+        changes.extend(_disk(spec.disk_bytes, state, spec.kind == "vm"))
     changes.extend(
         _device_changes(
             MOUNT_PREFIX,
@@ -159,11 +158,26 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
                 for mount in spec.mounts
             },
             state.devices,
-            mount_effect,
+            Effect.LIVE,  # virtiofs hot-plug, retarget and removal work on running VMs
             "mounts",
         )
     )
-    changes.extend(
+    if spec.kind == "vm" and spec.ports:
+        changes.append(
+            Change(
+                "ports",
+                Effect.UNSUPPORTED,
+                "ports are not supported on VMs: Incus only allows NAT-mode proxies "
+                "there, which need a static IPv4 address on the instance NIC",
+            )
+        )
+    else:
+        changes.extend(_ports(spec, state))
+    return changes
+
+
+def _ports(spec: MachineSpec, state: MachineState) -> list[Change]:
+    return list(
         _device_changes(
             PORT_PREFIX,
             "proxy",
@@ -179,10 +193,9 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
             "ports",
         )
     )
-    return changes
 
 
-def _disk(wanted: int, state: MachineState) -> list[Change]:
+def _disk(wanted: int, state: MachineState, vm: bool) -> list[Change]:
     root = state.expanded_devices.get("root", {})
     current_text = root.get("size")
     current = parse_size(current_text) if current_text else None
@@ -196,10 +209,11 @@ def _disk(wanted: int, state: MachineState) -> list[Change]:
         ]
     if current == wanted:
         return []
+    # A running VM only sees the larger disk after its next boot.
     return [
         Change(
             "disk",
-            Effect.LIVE,
+            Effect.RESTART if vm else Effect.LIVE,
             f"set root size={wanted}B",
             "root-size",
             "root",

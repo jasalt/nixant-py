@@ -110,7 +110,7 @@ def _apply(provider: IncusProvider, name: str, changes: list[Change]) -> None:
 
 
 def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) -> None:
-    """Apply live changes now, restart-only ones when stopped, refuse the rest."""
+    """Store every change on the instance, or refuse the whole set up front."""
     changes = plan(spec, state)
     blocked = [c for c in changes if c.effect in (Effect.RECREATE, Effect.UNSUPPORTED)]
     if blocked:
@@ -120,18 +120,17 @@ def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) 
         )
     if any(c.op == "root-size" for c in changes):
         provider.check_quota(state.expanded_devices.get("root", {}).get("pool"))
-    live = [c for c in changes if c.effect is Effect.LIVE]
-    later = [c for c in changes if c.effect is Effect.RESTART]
-    _apply(provider, spec.instance_name, live)
-    if state.status == "Stopped":
-        _apply(provider, spec.instance_name, later)
-    else:
-        for change in later:
-            typer.echo(
-                f"{change.setting}: {change.summary} needs a restart; "
-                "run nixant restart",
-                err=True,
-            )
+    # Restart-effect settings are stored now (Incus accepts them on a running
+    # instance) but only show up in the guest after its next boot.
+    _apply(provider, spec.instance_name, changes)
+    if state.status != "Stopped":
+        for change in changes:
+            if change.effect is Effect.RESTART:
+                typer.echo(
+                    f"{change.setting}: takes effect after the next restart; "
+                    f"run nixant restart",
+                    err=True,
+                )
 
 
 def _deploy(
@@ -161,8 +160,6 @@ def _deploy(
                 replace(mount, source=str(sources[mount.name])) for mount in spec.mounts
             ),
         )
-        if spec.kind != "container":
-            raise NixantError("VM support is not implemented yet")
         assert evaluated.drv_path is not None
         system = build(root, target, evaluated.drv_path, runner)
         state = resolve(
@@ -353,8 +350,7 @@ def restart(
                     f"could not restart {state.name} within 60s; "
                     f"run nixant restart {target} --force\n{exc}"
                 ) from exc
-        kind = "vm" if state.kind == "virtual-machine" else "container"
-        wait_ready(provider, state.name, kind, verbose=runner.verbose)
+        wait_ready(provider, state.name, state.kind, verbose=runner.verbose)
         typer.echo(f"{state.name}: restarted")
 
 

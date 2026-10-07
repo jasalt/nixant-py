@@ -162,14 +162,33 @@ def test_mounts_add_change_remove_are_live_for_containers(spec: MachineSpec) -> 
     assert set_change.values == {"readonly": "true"}
 
 
-def test_vm_mounts_need_restart(spec: MachineSpec) -> None:
-    spec = replace(spec, kind="vm")
-    changes = plan(spec, state(kind="virtual-machine"))
-    assert [c.effect for c in changes] == [Effect.RESTART]
+def test_vm_mounts_limits_are_live(spec: MachineSpec) -> None:
+    spec = replace(spec, kind="vm", cpus=2, memory_bytes=2**30)
+    changes = plan(spec, state(kind="vm"))
+    assert {(c.setting, c.effect) for c in changes} == {
+        ("cpus", Effect.LIVE),
+        ("memory", Effect.LIVE),
+        ("mounts", Effect.LIVE),
+    }
+
+
+def test_vm_disk_growth_needs_restart(spec: MachineSpec) -> None:
+    spec = replace(spec, kind="vm", disk_bytes=2**34)
+    current = state(devices={"nixant-mount-workspace": MOUNT}, kind="vm")
+    changes = plan(spec, current)
+    assert [(c.setting, c.effect) for c in changes] == [("disk", Effect.RESTART)]
+
+
+def test_vm_ports_are_unsupported(spec: MachineSpec) -> None:
+    spec = replace(spec, kind="vm", ports=(PortSpec(8080, 80),))
+    current = state(devices={"nixant-mount-workspace": MOUNT}, kind="vm")
+    changes = plan(spec, current)
+    assert [(c.setting, c.effect) for c in changes] == [("ports", Effect.UNSUPPORTED)]
+    assert "NAT" in changes[0].summary
 
 
 def test_kind_mismatch_is_recreate(spec: MachineSpec) -> None:
-    changes = plan(spec, state(kind="virtual-machine"))
+    changes = plan(spec, state(kind="vm"))
     assert [c.effect for c in changes] == [Effect.RECREATE]
     assert "destroy" in changes[0].summary
 

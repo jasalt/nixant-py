@@ -27,7 +27,8 @@ def _state(data: Any) -> MachineState:
         return MachineState(
             name=data["name"],
             status=data["status"],
-            kind=data["type"],
+            # Incus says "virtual-machine"; nixant uses "vm" everywhere else.
+            kind="vm" if data["type"] == "virtual-machine" else data["type"],
             config=data["config"],
             devices=data["devices"],
             created_at=data.get("created_at", ""),
@@ -87,8 +88,6 @@ class IncusProvider:
         return [_state(item) for item in data]
 
     def create(self, spec: MachineSpec, metadata: Mapping[str, str]) -> None:
-        if spec.kind != "container":
-            raise NixantError("VM creation is not supported yet")
         # Validate mounts before creating an instance, including direct API callers.
         for mount in spec.mounts:
             self._mount_args(mount)
@@ -97,8 +96,13 @@ class IncusProvider:
             "create",
             "images:nixos/unstable",
             _local(spec.instance_name),
-            "-c",
-            "security.nesting=true",
+            # Nesting lets guest-side Nix sandbox builds work in containers; the
+            # stock VM image declares secureboot incompatible.
+            *(
+                ["--vm", "-c", "security.secureboot=false"]
+                if spec.kind == "vm"
+                else ["-c", "security.nesting=true"]
+            ),
         ]
         for key, value in sorted(metadata.items()):
             argv.extend(["-c", f"{key}={value}"])

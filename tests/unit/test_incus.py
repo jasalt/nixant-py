@@ -106,6 +106,25 @@ def test_create(provider: IncusProvider) -> None:
     ]
 
 
+def test_create_vm(provider: IncusProvider) -> None:
+    data = json.loads(
+        (Path(__file__).parents[2] / "nix/tests/runtime.json").read_text()
+    )
+    spec = replace(MachineSpec.from_runtime(data), kind="vm", mounts=())
+    provider.create(spec, {"user.nixant.managed": "true"})
+    assert provider.runner.run.call_args.args[0] == [
+        "incus",
+        "create",
+        "images:nixos/unstable",
+        "local:test-dev",
+        "--vm",
+        "-c",
+        "security.secureboot=false",
+        "-c",
+        "user.nixant.managed=true",
+    ]
+
+
 def test_lifecycle(provider: IncusProvider) -> None:
     provider.start("dev")
     provider.stop("dev")
@@ -495,3 +514,22 @@ def test_check_quota_reads_default_profile_pool(provider: IncusProvider) -> None
     ]
     provider.check_quota(None)
     assert provider.runner.run.call_args_list[1].args[0][-1].endswith("/tank")
+
+
+@pytest.mark.parametrize(
+    ("incus_type", "kind"), [("container", "container"), ("virtual-machine", "vm")]
+)
+def test_inspect_normalizes_instance_kind(
+    provider: IncusProvider, incus_type: str, kind: str
+) -> None:
+    provider.runner.run.return_value = response(
+        {
+            "name": "dev",
+            "status": "Running",
+            "type": incus_type,
+            "config": {},
+            "devices": {},
+        }
+    )
+    state = provider.inspect("dev")
+    assert state is not None and state.kind == kind
