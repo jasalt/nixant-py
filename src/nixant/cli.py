@@ -38,7 +38,7 @@ from nixant.project import (
     resolve_mount_sources,
     target_lock,
 )
-from nixant.providers.incus import IncusProvider
+from nixant.providers.incus import MOUNT_PREFIX, IncusProvider
 from nixant.readiness import wait_ready
 from nixant.run import Runner, check_host_tools
 
@@ -152,21 +152,38 @@ def _deploy(
             if state is None:
                 provider.create(spec, metadata(root, target))
                 provider.start(spec.instance_name)
-            elif state.status in ("Stopped", "Frozen"):
-                for mount in spec.mounts:
-                    provider.ensure_mount(spec.instance_name, mount)
-                provider.start(spec.instance_name)
-            elif state.status != "Running":
+            elif state.status not in ("Running", "Stopped", "Frozen"):
                 raise NixantError(
                     f"instance {spec.instance_name} "
                     f"has unsupported state {state.status}"
                 )
+            else:
+                # Mounts dropped from the configuration must not stay attached;
+                # only devices nixant itself manages are considered.
+                wanted = {mount.name for mount in spec.mounts}
+                for device in sorted(state.devices):
+                    mount_name = device.removeprefix(MOUNT_PREFIX)
+                    if device.startswith(MOUNT_PREFIX) and mount_name not in wanted:
+                        provider.remove_mount(spec.instance_name, mount_name)
+                if state.status != "Running":
+                    for mount in spec.mounts:
+                        provider.ensure_mount(spec.instance_name, mount)
+                    provider.start(spec.instance_name)
         wait_ready(provider, spec.instance_name, spec.kind, verbose=runner.verbose)
         if not rebuild:
             for mount in spec.mounts:
                 provider.ensure_mount(spec.instance_name, mount, verify=True)
         if rebuild or state is None or not can_skip(provider, state, system):
             activate(provider, runner, spec, system, timeout=duration)
+        else:
+            # Settings that do not change the system closure still drive shell/exec.
+            runtime = {
+                PREFIX + "user": spec.user.name,
+                PREFIX + "workdir": spec.workdir,
+            }
+            stale = {k: v for k, v in runtime.items() if state.config.get(k) != v}
+            if stale:
+                provider.set_metadata(spec.instance_name, stale)
         final = provider.inspect(spec.instance_name)
         addresses = " ".join(final.ipv4) if final else ""
         typer.echo(

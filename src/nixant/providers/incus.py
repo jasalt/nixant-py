@@ -13,6 +13,8 @@ from nixant.errors import CommandError, NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec
 from nixant.run import Runner
 
+MOUNT_PREFIX = "nixant-mount-"
+
 
 def _local(name: str) -> str:
     if not name or any(char in name for char in "/:\0\n"):
@@ -159,11 +161,23 @@ class IncusProvider:
             f"readonly={'true' if mount.read_only else 'false'}",
         ]
 
+    def remove_mount(self, name: str, mount_name: str) -> None:
+        self.runner.run(
+            [
+                "incus",
+                "config",
+                "device",
+                "remove",
+                _local(name),
+                f"{MOUNT_PREFIX}{mount_name}",
+            ]
+        )
+
     def ensure_mount(
         self, name: str, mount: MountSpec, *, verify: bool = False
     ) -> None:
         args = self._mount_args(mount)
-        device = f"nixant-mount-{mount.name}"
+        device = f"{MOUNT_PREFIX}{mount.name}"
         state = self.inspect(name)
         if state is None:
             raise NixantError(f"instance {name} disappeared")

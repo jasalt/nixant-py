@@ -1,4 +1,5 @@
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
@@ -9,7 +10,11 @@ from typer.testing import CliRunner
 from nixant.cli import app, parse_duration
 from nixant.errors import NixantError, UsageError
 from nixant.models import MachineSpec, MachineState
+from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
+from nixant.ownership import PREFIX
+from nixant.providers.incus import IncusProvider
+from nixant.run import Runner
 
 
 @pytest.fixture
@@ -148,3 +153,112 @@ def test_duration(value: str | None, expected: float | None) -> None:
 def test_invalid_duration(value: str) -> None:
     with pytest.raises(UsageError):
         parse_duration(value)
+
+
+@pytest.fixture
+def running_deploy(
+    deploy: dict[str, Mock], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict:
+    """Exercise the real provider/skip check against an in-memory Incus response."""
+    data = {
+        "name": "test-dev",
+        "status": "Running",
+        "type": "container",
+        "config": {
+            PREFIX + "activation": "ok",
+            PREFIX + "system": "system",
+            PREFIX + "user": "dev",
+            PREFIX + "workdir": "/workspace",
+        },
+        "devices": {
+            "nixant-mount-workspace": {
+                "type": "disk",
+                "source": str(tmp_path),
+                "path": "/workspace",
+                "shift": "true",
+                "readonly": "false",
+            },
+            "unrelated": {"type": "disk", "source": "/other", "path": "/other"},
+        },
+    }
+    runner = Mock(spec=Runner)
+
+    def run(argv, **kwargs):
+        stdout = b""
+        if argv[:2] == ["incus", "query"]:
+            stdout = json.dumps(data).encode()
+        elif argv[:3] == ["incus", "config", "set"]:
+            data["config"].update(item.split("=", 1) for item in argv[4:])
+        elif argv[:4] == ["incus", "config", "device", "remove"]:
+            del data["devices"][argv[5]]
+        elif argv[:4] == ["incus", "config", "device", "add"]:
+            data["devices"][argv[5]] = {
+                "type": argv[6],
+                **dict(item.split("=", 1) for item in argv[7:]),
+            }
+        elif argv[:3] == ["incus", "exec", "-T"]:
+            command = argv[argv.index("--") + 1 :]
+            if command == ["readlink", "-f", "/run/current-system"]:
+                stdout = b"system\n"
+            elif command == ["cat", "/proc/mounts"]:
+                stdout = b"source /workspace none rw 0 0\n"
+            else:
+                raise RuntimeError(f"unexpected guest command: {argv}")
+        else:
+            raise RuntimeError(f"unexpected Incus command: {argv}")
+        return subprocess.CompletedProcess(argv, 0, stdout, b"")
+
+    runner.run.side_effect = run
+    provider = IncusProvider(runner)
+    deploy["resolve"].return_value = provider.inspect("test-dev")
+    monkeypatch.setattr("nixant.cli.IncusProvider", lambda runner: provider)
+    monkeypatch.setattr("nixant.cli.can_skip", can_skip)
+    return data
+
+
+def test_up_refreshes_workdir_without_switching(
+    deploy: dict[str, Mock], running_deploy: dict
+) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, workdir="/tmp")
+    )
+    result = CliRunner().invoke(app, ["up"])
+    if result.exception is not None:
+        raise result.exception
+    assert result.exit_code == 0, result.output
+    assert running_deploy["config"][PREFIX + "workdir"] == "/tmp"
+    deploy["activate"].assert_not_called()
+
+
+def test_up_removes_obsolete_mount_without_touching_unrelated_devices(
+    deploy: dict[str, Mock], running_deploy: dict
+) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, mounts=())
+    )
+    result = CliRunner().invoke(app, ["up"])
+    if result.exception is not None:
+        raise result.exception
+    assert result.exit_code == 0, result.output
+    assert "nixant-mount-workspace" not in running_deploy["devices"]
+    assert running_deploy["devices"]["unrelated"] == {
+        "type": "disk",
+        "source": "/other",
+        "path": "/other",
+    }
+
+
+def test_up_replaces_renamed_mount(
+    deploy: dict[str, Mock], running_deploy: dict
+) -> None:
+    original = deploy["evaluate"].return_value
+    renamed = replace(original.spec.mounts[0], name="code")
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, mounts=(renamed,))
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    assert "nixant-mount-workspace" not in running_deploy["devices"]
+    assert "unrelated" in running_deploy["devices"]
