@@ -119,14 +119,17 @@ class IncusProvider:
             ]
         )
 
-    def restart(self, name: str, *, force: bool = False) -> None:
+    def restart(
+        self, name: str, *, force: bool = False, timeout: float | None = None
+    ) -> None:
         self.runner.run(
             [
                 "incus",
                 "restart",
                 _local(name),
                 *(["--force"] if force else ["--timeout", "60"]),
-            ]
+            ],
+            timeout=timeout,
         )
 
     def destroy(self, name: str) -> None:

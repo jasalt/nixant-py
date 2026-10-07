@@ -121,11 +121,23 @@ def activate(
     if switched.returncode == 100:
         record("reboot-required")
         print(f"new system needs a restart; restarting {name}", file=sys.stderr)
-        provider.restart(name)
-        ready = wait_ready(provider, name, spec.kind)
-        current = provider.run(
-            name, ["readlink", "-f", "/run/current-system"], capture=True
-        )
+        try:
+            # The original deadline covers recovery too; never restart the budget.
+            provider.restart(name, timeout=remaining())
+            ready = wait_ready(provider, name, spec.kind, timeout=remaining())
+            current = provider.run(
+                name,
+                ["readlink", "-f", "/run/current-system"],
+                capture=True,
+                timeout=remaining(),
+            )
+        except (KeyboardInterrupt, subprocess.TimeoutExpired) as exc:
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise NixantError(
+                    f"activation did not finish within {timeout}s while restarting "
+                    f"{name}; run nixant up to retry"
+                ) from exc
+            raise NixantError("activation interrupted; run nixant up to retry") from exc
         if current.stdout.decode().strip() != system:
             record("failed")
             raise NixantError(f"instance {name} did not boot the new system")
