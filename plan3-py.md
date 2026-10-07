@@ -41,6 +41,10 @@ Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs
 | 22 | Version pin | Template keeps an unversioned `nixant.url`; `init` locks it to the CLI's revision via `--override-input` |
 | 23 | Activation bound | No default timeout; `up`/`rebuild --timeout DURATION` for scripts and agents |
 | 24 | Reboot-required switch | Exit 100 → automatic `incus restart`, then verify and record |
+| 25 | Guest-side Nix | Supported: flakes enabled, user trusted, nesting required (verified) |
+| 26 | `/etc/nixos` | Activation installs a throwing stub; stock files removed |
+| 27 | Bootstrap image churn | Accepted and documented; nixant never changes Incus server config |
+| 28 | Second checkout on one host | Per-checkout git config override of the instance name, set via `nixant name`; `status --orphans` |
 
 ---
 
@@ -84,8 +88,31 @@ The container module must preserve what the stock image's `/etc/nixos/configurat
 - `systemd.network` DHCP on `eth0`, `networking.useDHCP = false`, `useHostResolvConf = false`
 - `networking.hostName = mkDefault config.nixant.instanceName`, so the hostname, the system store name (`…-nixos-system-<instanceName>-<release>`), and the Incus instance name are identical
 - the nixpkgs release assertion (≥ 25.05, see Activation)
+- guest Nix for the user (see below): `nix.settings.experimental-features = mkDefault [ "nix-command" "flakes" ]`
+- a stale-config guard for `/etc/nixos` (see below)
 
 The VM module must keep `incus-agent` enabled; without it the CLI loses `incus exec` after the first switch.
+
+### Guest-side Nix
+
+Running `nix build` / `nix develop` as the user inside the guest is supported. It uses the guest's own Nix daemon and store, separate from the host's.
+
+- **Flakes and `nix-command`** are enabled by default (`mkDefault`).
+- **`nix.settings.trusted-users = mkDefault [ "root" <nixant.user.name> ]`.** This adds no privilege, since the user already has passwordless sudo. It lets a project flake's `nixConfig.extra-substituters` take effect.
+- **Substituters:** cache.nixos.org by default (the stock image's setting); projects add their own through normal NixOS or flake config.
+- **`security.nesting=true` is required for this.** Sandboxed builds as a non-root user succeed with nesting and fail without it ("this system does not support the kernel namespaces that are required for sandboxing"); the guest boots either way (verified).
+- **Workspace ownership:** the workspace is owned by the same UID as the guest user (shifted mount). Flake evaluation of `/workspace` inside the guest therefore avoids the libgit2 ownership error that guest root hits.
+
+### Stale `/etc/nixos`
+
+After the first activation, the stock `/etc/nixos/configuration.nix` and `incus.nix` are dead: nothing imports them. Running plain `nixos-rebuild switch` inside the guest would silently revert to the stock system.
+
+On every activation, an activation script in the container module:
+- replaces `/etc/nixos/configuration.nix` with a stub that evaluates to `throw "This system is managed by nixant (instance <instanceName>). Edit the project flake and run `nixant rebuild` on the host."`
+- removes `/etc/nixos/incus.nix`
+- writes `/etc/nixos/README`
+
+Incus regenerates `incus.nix` only on `create` and `copy` (image template `when: [create, copy]`, verified), so re-running the script on each activation also covers `incus copy`.
 
 ### Options
 
@@ -109,7 +136,7 @@ nixant = {
 };
 ```
 
-`nixant.user` creates `users.users.<name>` (normal user, given UID, group with same GID, home `/home/<name>`, member of `wheel`). With `sudo = true` (default) it adds a `security.sudo.extraRules` NOPASSWD rule for that user only. It is a convenience; users may extend it with any NixOS or home-manager config. `name = "root"` and `uid = 0` are rejected by assertion: `shell`/`exec` always enter as this non-root user, and the UID must equal an unprivileged host UID.
+`nixant.user` creates `users.users.<name>` (normal user, given UID, group with same GID, home `/home/<name>`, member of `wheel`, Nix trusted user). With `sudo = true` (default) it adds a `security.sudo.extraRules` NOPASSWD rule for that user only. It is a convenience; users may extend it with any NixOS or home-manager config. `name = "root"` and `uid = 0` are rejected by assertion: `shell`/`exec` always enter as this non-root user, and the UID must equal an unprivileged host UID.
 
 `nixant.workdir` is the working directory for `shell` and `exec`. Renaming or removing the `workspace` mount does not break it: without that mount it falls back to the user's home. An explicit value must be an absolute path.
 
@@ -185,9 +212,10 @@ nixant exec     [-n TARGET] CMD...
 nixant down     [TARGET] [--force]
 nixant restart  [TARGET] [--force]
 nixant destroy  [TARGET]
-nixant status   [TARGET]
+nixant status   [TARGET] [--orphans]
 nixant config   [TARGET]
 nixant adopt    [TARGET] [--instance NAME]
+nixant name     [TARGET] [NAME | --unset]
 ```
 
 - `TARGET` is the `nixosConfigurations` attribute; default `dev`. It must match `[A-Za-z_][A-Za-z0-9_-]*` (a plain Nix identifier), so the CLI never has to quote it in installables. Other names are rejected with a usage error.
@@ -201,13 +229,17 @@ Walk up from the current directory to the nearest `flake.nix`; that directory is
 
 Project ID: first 12 hex chars of SHA-256 of the resolved root path.
 
-Instance name: always `nixant.instanceName`, read from the evaluated config; the CLI never derives one. Renaming or moving the project directory therefore does not change the instance (`adopt` only fixes the root path).
+Instance name: the per-checkout override if one is set, otherwise `nixant.instanceName` from the evaluated config. The CLI never derives a name by itself. Renaming or moving the project directory therefore does not change the instance (`adopt` only fixes the root path).
 
-The name is committed, so it is shared by everyone using the repository. That is fine across machines, because Incus names are per host. On one host, two projects (or two git worktrees or clones of the same repository) with the same `instanceName` clash. The ownership check reports it with `set nixant.instanceName`; changing the name means editing a tracked file until personalization exists (see Deferred).
+Override lookup: `git config --get nixant.<target>.instanceName`, run from the project root and skipped outside a git work tree. It reads the clone's `.git/config` or, with `extensions.worktreeConfig`, the worktree's own config. Overrides go through the same Incus name validation as the Nix option. They are user configuration kept by git, not nixant state, and are written only by `nixant name`.
+
+The name is committed, so it is shared by everyone using the repository. That is fine across machines, because Incus names are per host. On one host, two projects (or two git worktrees or clones of the same repository) with the same `instanceName` clash. The ownership check reports it and suggests `nixant name <target>`, which gives this checkout its own name without touching tracked files.
+
+Limitation: the override is invisible to pure evaluation. The guest hostname and system store name keep the committed `instanceName`, so both guests show the same prompt while Incus calls them by different names. `status` and `shell`'s ready message show the effective name. Making the hostname follow the override is left to personalization (see Deferred).
 
 ### Locking
 
-Mutating commands (`up`, `rebuild`, `down`, `restart`, `destroy`, `adopt`) hold an exclusive `flock` on `$XDG_STATE_HOME/nixant/locks/<project-id>-<target>.lock` for their whole run. If the lock is taken, they fail at once with `another nixant command is running for target dev`. This prevents two `switch-to-configuration` runs in one guest and racing creates. `shell`, `exec`, `status`, `config`, and `init` take no lock.
+Mutating commands (`up`, `rebuild`, `down`, `restart`, `destroy`, `adopt`, `name`) hold an exclusive `flock` on `$XDG_STATE_HOME/nixant/locks/<project-id>-<target>.lock` for their whole run. If the lock is taken, they fail at once with `another nixant command is running for target dev`. This prevents two `switch-to-configuration` runs in one guest and racing creates. `shell`, `exec`, `status`, `config`, and `init` take no lock.
 
 ### Untracked-file pre-flight
 
@@ -262,12 +294,13 @@ next: nixant up
 ### `up`
 
 ```text
-1. take the target lock; discover project, untracked-file pre-flight, eval nixant.runtime
+1. take the target lock; discover project, untracked-file pre-flight;
+   evaluate once: { runtime = config.nixant.runtime; drvPath = toplevel.drvPath; }
      target missing           → fail, listing available targets
      module not imported      → fail naming nixant.nixosModules.container
 2. check user.uid == os.getuid()                     (fail with the option to set)
    check every mount source exists on the host       (fail naming the option and path)
-3. nix build toplevel --out-link $XDG_STATE_HOME/nixant/gcroots/<project-id>-<target>
+3. nix build '<drvPath>^out' --out-link $XDG_STATE_HOME/nixant/gcroots/<project-id>-<target>
 4. resolve the instance (see Instance lookup, evaluating form)
      schema differs           → fail (see Schema version)
      exists + kind differs    → fail: "destroy and up to change kind"
@@ -281,6 +314,16 @@ next: nixant up
 Steps 1–3 run before any Incus mutation, so a broken config never leaves a half-created instance. If step 7 fails the instance stays running and the recorded activation state is not `ok`, so the next `up` retries; the message says to fix the config and run `nixant rebuild`.
 
 Available targets for the target-missing error come from `nix eval --json .#nixosConfigurations --apply builtins.attrNames`. This does not force any configuration, so it stays cheap. It lists all configurations, including ones that don't import a nixant module.
+
+### Evaluation cost
+
+Evaluating a NixOS configuration is the main latency. The external simulation measured about 40s cold (fresh clone: fetching inputs plus the module system) and seconds when warm.
+
+- **One evaluation per command.**
+  - `up`/`rebuild` use a single `nix eval --json .#nixosConfigurations.<t> --apply 'c: { runtime = …; drvPath = …; }'`. Building by `.drv` path needs no second evaluation.
+  - `config` evaluates only `runtime`, which is lazier than the full system.
+- **Never silent.** Before evaluating, print `evaluating <target>…`, and pass Nix's stderr (fetch and progress lines) through to the terminal instead of capturing it. A cold first run then shows what it is waiting for.
+- **Eval cache:** Nix's flake eval cache does not apply to `--apply` expressions or dirty git trees. Accepted for Phases 1–2; re-measure early in Phase 1 (see To verify early).
 
 Instance states: `Running` → continue; `Stopped` → start; `Frozen` → `incus start` (resumes; verified); `Error` or anything else → fail and print the state.
 
@@ -343,11 +386,26 @@ target: dev   system: …-nixos-system-supplier-import-dev-26.05 (ok, current)
 root: /home/user/src/supplier-import
 ```
 
-The first word in parentheses is `user.nixant.activation`. `current` / `outdated` compares `user.nixant.system` with the GC-root symlink if present. Missing instance: `dev: not created`, exit 0.
+The first word in parentheses is `user.nixant.activation`. `current` / `outdated` compares `user.nixant.system` with the GC-root symlink if present. Missing instance: `dev: not created`, exit 0. An instance named by an override is marked `(override)`.
+
+`--orphans` lists all managed instances on the host (`user.nixant.managed=true`) whose `user.nixant.root` no longer exists, typically left behind by `git worktree remove` or a deleted clone. It shows name, target, and the old root, and suggests `incus delete --force local:NAME` or `nixant adopt`.
 
 ### `config`
 
-Prints `nixant.runtime` JSON plus the project root, project ID, resolved instance name, and absolute mount sources.
+Prints `nixant.runtime` JSON plus the project root, project ID, effective instance name and its source (`config` or `git override`), and absolute mount sources.
+
+### `name`
+
+`nixant name [TARGET] [NAME | --unset]` sets this checkout's instance-name override for a target. It does not evaluate and takes the target lock.
+
+- **Without `NAME`:** uses `<committed instanceName>-<checkout dir name>`, sanitized, and prints it. No prompt; run again with `NAME` to choose another.
+- **Where it writes:**
+  - In a linked worktree, or a repository with several worktrees: enables `extensions.worktreeConfig` if needed, then `git config --worktree`.
+  - Otherwise, the clone's own `git config`.
+  - It prints which one it used.
+- **Refuses** to rename an existing instance: if this checkout already owns one for the target, it fails with `destroy it first, or keep the current name`. Renaming may come later via `incus rename`.
+- **`--unset`** removes the override, with the same refusal.
+- Outside a git work tree: error, since there is nowhere to store the override.
 
 ### `adopt`
 
@@ -390,7 +448,7 @@ An instance belongs to a target only if `managed=true`, `project` equals the cur
 
 ```text
 error: instance foo-dev exists but is not managed by nixant
-error: instance foo-dev belongs to /other/checkout; set nixant.instanceName or run nixant adopt
+error: instance foo-dev belongs to /other/checkout; for a second checkout run `nixant name dev`, or `nixant adopt` if that checkout was moved
 error: instance foo-dev belongs to target test of this project; give dev a different nixant.instanceName
 ```
 
@@ -418,7 +476,7 @@ This is separate from `nixant.runtime.schemaVersion`, which describes the Nix-si
 - 1 match → that instance.
 - More than 1 (e.g. `incus copy`, or an old instance left after `instanceName` changed) → error listing the names, suggesting `incus delete local:NAME` for the stale one.
 
-**Evaluating form** (`up`, `rebuild`): run the metadata lookup, then compare with the configured name `N`.
+**Evaluating form** (`up`, `rebuild`): run the metadata lookup, then compare with the effective name `N` (override or `nixant.instanceName`). Setting or removing an override while an instance exists lands in the `X ≠ N` row; its message names both sources.
 
 | Metadata matches | Instance named `N` | Result |
 |---|---|---|
@@ -452,7 +510,10 @@ class Provider(Protocol):
 Command construction is confined to `providers/incus.py`:
 
 - Always qualify instances as `local:NAME`; use the current Incus project.
-- Image: `images:nixos/unstable` (only bootstraps the guest; the flake pins the real system). `images:nixos/26.05` also exists.
+- Image: `images:nixos/unstable` (only bootstraps the guest; the flake pins the real system). `images:nixos/26.05` also exists, but pinning it changes nothing: both are rebuilt daily.
+  - Image churn is accepted. With Incus defaults, a cached remote image auto-updates (about 280 MB per refresh) and expires 10 days after it was last used.
+  - These are host-wide settings (`images.auto_update_cached`, `images.auto_update_interval`, `images.remote_cache_expiry`) shared with unrelated instances, so nixant never changes server config. The README documents them for admins who want less churn.
+- `security.nesting=true` is always set: guest-side Nix builds need it (see Guest-side Nix).
 - Create: `incus create images:nixos/unstable local:NAME -c security.nesting=true -c user.nixant.*…`; add devices; then `incus start local:NAME`. The image is named with its `images:` remote and the destination with `local:`. A bare `local:IMAGE` would search the local image store instead.
 - VM (Phase 3): `--vm -c security.secureboot=false` (image declares `requirements.secureboot=false`).
 - Mounts (containers): `disk source=<abs> path=<target> shift=true [readonly=true]`. If adding with `shift=true` fails, stop with an error. Without shift, files appear as 65534 and are not writable. Verify the mount appeared and retry (see Relation to Incant).
@@ -508,7 +569,7 @@ Exit-code meanings are from `switch-to-configuration-ng`. Supported guest nixpkg
 Skip condition (`up` only): skip activation only if `activation=ok` **and** `system` equals the built path **and** `/run/current-system` equals the built path. `/run/current-system` alone is not evidence of success: the activation script updates it before `switch-to-configuration` finishes restarting units, so a failed switch can leave it pointing at the new system. `degraded`, `failed`, `pending`, and `reboot-required` never skip, so `up` retries them. `rebuild` never skips.
 
 - Guest root is a trusted Nix user, so unsigned imports work. Tested with an 8-path closure on Nix 2.34.
-- No flakes or `NIX_CONFIG` in the guest; the guest never evaluates.
+- No flakes or `NIX_CONFIG` needed for activation; nixant never evaluates in the guest. The user's own guest-side Nix use is separate (see Guest-side Nix).
 - Output of `switch-to-configuration` stays visible; export/import shows a path count and byte total in verbose mode.
 
 ## Readiness
@@ -556,7 +617,7 @@ examples/basic/flake.nix
 src/nixant/
   __main__.py
   cli.py                   # Typer app, error → exit code mapping
-  project.py               # discovery, project ID, mount path resolution, untracked pre-flight, locking
+  project.py               # discovery, project ID, instance-name override lookup, mount path resolution, untracked pre-flight, locking
   init.py                  # template listing, nix flake init, instance-name proposal, lock pinning, snippets
   models.py                # frozen dataclasses: MachineSpec, MountSpec, PortSpec, UserSpec, MachineState
   errors.py
@@ -602,7 +663,7 @@ Nix options module and container module, example flake, `templates.default`, dis
 
 ### Phase 2: machine settings
 
-cpus/memory/disk limits, ports, multiple and read-only mounts, planner with classification, `restart`, `adopt`, `node` and `python` templates.
+cpus/memory/disk limits, ports, multiple and read-only mounts, planner with classification, `restart`, `adopt`, `name` and the override lookup, `status --orphans`, `node` and `python` templates.
 
 ### Phase 3: VMs
 
@@ -627,6 +688,7 @@ Only if needed; use it to reshape `Provider`.
   - Every row of the evaluating-lookup table; 0/1/many metadata matches.
   - Ownership check rejects a project-ID match when the target differs.
 - Unit tests, activation recording: `pending` written before import; exit 0 → `ok`; exit 4 → `degraded`; exit 100 → `reboot-required` → restart → `ok`/`degraded`/`failed` by the post-restart check; exits 1/2, import failure → `failed`; `Could not acquire lock` → the guest-lock message; interruption or `--timeout` expiry → `pending`; never a stale `ok`. The skip condition is false unless all three parts hold, and `rebuild` never skips.
+- Unit tests, instance-name override (temporary git repos): no override → committed name; clone override; worktree override with `extensions.worktreeConfig` enabled by `nixant name`; invalid override rejected; `name` refuses when an instance exists; `status --orphans` after the root is removed.
 - Unit tests, lifecycle edge cases:
   - Lock contention fails fast.
   - Schema mismatch: `up`/`shell`/`exec`/`adopt` refuse, `down`/`destroy` proceed.
@@ -641,9 +703,22 @@ Only if needed; use it to reshape `Provider`.
     - Interrupt `up` during import → `up` again completes.
     - Introduce a Nix syntax error → `status`, `down`, `destroy` still work.
   - Cross-target: two targets with distinct names coexist; giving them the same `instanceName` makes the second `up` fail without modifying the first instance.
+  - Second worktree (Phase 2): `git worktree add` → `up` fails with the `nixant name` hint → `nixant name dev` → `up` creates a second instance; both run in parallel; `git worktree remove` → `status --orphans` lists it.
   - Shell independence: set the user's shell to fish → `exec -- true` still works, and `shell` starts fish.
+  - Guest-side Nix: `exec -- nix build` of a small derivation from a `/workspace` flake, and `exec -- nix develop -c true`, both as the user.
+  - Stale config guard: after `up`, `exec -- sudo nixos-rebuild dry-build` fails with the nixant stub message, and `/etc/nixos/incus.nix` is gone.
 
 ## Verified during review
+
+External simulation (flows run by hand on the Lima VM: btrfs pool, Nix 2.34, prebuilt 26.05 container system):
+
+- **Transport is fast enough:** stdin export/import moved 1.3 GiB / 565 missing paths in about 25s, so no fallback cache is needed at this scale.
+- **Activation works end to end:** setting the profile and switching took about 20s, with rc 0. After stop/start, the guest boots the activated system (`/run/current-system` is the activated path, systemd `running`), so the `up` skip condition holds across restarts.
+- **Readiness is quick:** `incus exec -- true` succeeds 1–2s after start.
+- **Also confirmed:** `incus list` config-key filters, `--cwd`, the `runuser` wrapper, exit-status propagation through `bash -lc 'exec "$@"'`, piping, and shifted-mount ownership.
+- **First activation leaves about 2.6 GiB** in the guest store (see Deferred: guest store growth).
+
+Own probes:
 
 - `images:nixos/unstable` and `nixos/26.05` exist (container + VM); VM image requires `security.secureboot=false`.
 - Stock image config: `lxc-container.nix` + systemd-networkd on `eth0`; `nix-command` disabled; `nixos-rebuild` is `nixos-rebuild-ng`; Nix 2.34.
@@ -665,13 +740,14 @@ Only if needed; use it to reshape `Provider`.
 - `nix flake lock --override-input X <url>?rev=R` records rev `R` while `original` stays the unversioned URL from `flake.nix`. Later evals and plain `nix flake lock` keep `R`; `nix flake update X` moves to latest.
 - Interrupting (SIGINT/SIGTERM) or killing the `incus exec -T` client terminates the guest process.
 - `switch-to-configuration-ng` source: exclusive non-blocking `flock` on `/run/nixos/switch-to-configuration.lock` (exit 1, `Could not acquire lock`). Exit 100 when the `init` interface changes. Exit 2 on activation-script failure, 4 on unit failures. `block_on_jobs` has no timeout of its own.
+- Sandboxed `nix-build` as a non-root guest user through the guest daemon works with `security.nesting=true` and fails without it (`kernel namespaces that are required for sandboxing`). The container boots either way. Guest defaults: `trusted-users = root`, `substituters = https://cache.nixos.org/`, `allowed-users = *`.
+- The stock image's `/etc/nixos/incus.nix` comes from the image template `nix.tpl`, which runs only on `create` and `copy`.
+- Host Incus has no `images.*` overrides (defaults apply).
 - `nixos-rebuild-ng` runs `switch-to-configuration` via `systemd-run --pipe --service-type=exec --unit=nixos-rebuild-switch-to-configuration` (the precedent for a later detached switch).
 
 ## To verify early
 
-- Throughput of the stdin pipe for a multi-GB first push (Phase 1 spike; fall back to a `file://` cache on a shared mount if too slow).
-- Eval time of `config.nixant.runtime` (it runs the NixOS module system on every command that evaluates).
-- Whether `security.nesting=true` is strictly required for NixOS containers.
+- Eval time per command after the single-evaluation change (cold ~40s and warm "seconds" were measured on a forced full evaluation, not on `runtime` + `drvPath`).
 - Exactly when the activation script updates `/run/current-system` relative to unit restarts. The skip condition does not depend on the answer, but error messages might.
 - That nixpkgs 25.05 is the right minimum: `switch-to-configuration-ng` is the default there and its exit codes match the recording table. The degraded-service integration test covers this on the pinned version.
 - Clean `incus stop` duration for an idle NixOS container, to confirm the 60s `down` timeout is generous.
@@ -691,7 +767,7 @@ Future options:
 2. **Personal flake via `--override-input`.** The tool modules read an `nixant-user` input defaulting to an empty flake shipped by nixant; the CLI passes `--override-input nixant-user ~/.config/nixant` when it exists. The personal flake can have its own inputs (dotfiles, home-manager), and evaluation stays pure, but it needs more wiring and care to avoid writing the override into `flake.lock`.
 3. **UID-only injection.** Option 1 restricted to `uid`/`name`; dotfiles remain a team decision.
 
-Whichever is chosen should also allow overriding `nixant.instanceName` locally. That is the fix for a second checkout or worktree of the same repository on one host.
+A local instance-name override already exists for the second-checkout case (git config, see `name`). Whichever option is chosen should also make the guest hostname follow that override, which pure evaluation cannot do today.
 
 ## Deferred: guest store growth
 
