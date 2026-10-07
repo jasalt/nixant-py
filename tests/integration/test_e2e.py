@@ -341,3 +341,23 @@ def test_vm_lifecycle_and_settings(vm_project: Project) -> None:
     project.nixant("down")
     project.nixant("destroy")
     assert not project.instance_exists()
+
+
+def test_snapshot_and_restore(project: Project) -> None:
+    project.nixant("up")
+    project.exec("sh", "-c", "echo before > ~/state")
+    assert "created snapshot safe" in project.nixant("snapshot", "safe").stdout
+    assert "safe" in project.nixant("snapshots").stdout
+    assert project.nixant("snapshot", "safe", check=False).returncode != 0
+
+    project.exec("sh", "-c", "echo after > ~/state; touch ~/extra")
+    project.nixant("restore", "safe")
+    assert project.exec("cat", "/home/dev/state").stdout.strip() == "before"
+    assert project.exec("test", "-e", "/home/dev/extra", check=False).returncode != 0
+    # Ownership metadata survives the rollback, so normal commands still work.
+    assert project.incus_config("user.nixant.activation") == "ok"
+    project.nixant("rebuild")
+
+    project.nixant("snapshot", "safe", "--delete")
+    assert "safe" not in project.nixant("snapshots").stdout
+    assert project.nixant("restore", "safe", check=False).returncode != 0

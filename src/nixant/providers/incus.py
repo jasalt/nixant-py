@@ -10,7 +10,7 @@ from typing import Any, BinaryIO
 from urllib.parse import quote
 
 from nixant.errors import CommandError, NixantError
-from nixant.models import MachineSpec, MachineState, MountSpec
+from nixant.models import MachineSpec, MachineState, MountSpec, Snapshot
 from nixant.planner import MOUNT_PREFIX, PORT_PREFIX, Change
 from nixant.run import Runner
 
@@ -233,6 +233,43 @@ class IncusProvider:
                 f"nixant.disk is not supported on storage pool {pool} (driver dir); "
                 "unset it or use a btrfs/zfs/lvm pool"
             )
+
+    def snapshot_create(self, name: str, snapshot: str) -> None:
+        self.runner.run(["incus", "snapshot", "create", _local(name), snapshot])
+
+    def snapshot_list(self, name: str) -> list[Snapshot]:
+        _local(name)
+        result = self.runner.run(
+            [
+                "incus",
+                "query",
+                f"local:/1.0/instances/{quote(name, safe='')}/snapshots?recursion=1",
+            ],
+            capture=True,
+        )
+        data = _json(result.stdout)
+        if not isinstance(data, list):
+            raise NixantError("invalid Incus snapshot response: expected an array")
+        try:
+            return sorted(
+                (
+                    Snapshot(
+                        name=str(item["name"]),
+                        created_at=str(item.get("created_at", "")),
+                        stateful=bool(item.get("stateful", False)),
+                    )
+                    for item in data
+                ),
+                key=lambda snap: (snap.created_at, snap.name),
+            )
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise NixantError(f"invalid Incus snapshot response: {exc}") from exc
+
+    def snapshot_delete(self, name: str, snapshot: str) -> None:
+        self.runner.run(["incus", "snapshot", "delete", _local(name), snapshot])
+
+    def snapshot_restore(self, name: str, snapshot: str) -> None:
+        self.runner.run(["incus", "snapshot", "restore", _local(name), snapshot])
 
     def ensure_mount(
         self, name: str, mount: MountSpec, *, verify: bool = False

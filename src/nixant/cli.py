@@ -12,6 +12,7 @@ import click
 import typer
 from typer.core import TyperGroup
 
+from nixant import snapshots
 from nixant.adopt import adopt as adopt_instance
 from nixant.adopt import choose
 from nixant.errors import CommandError, NixantError, UsageError
@@ -531,3 +532,64 @@ def adopt(
         state = choose(provider, root, target, instance)
         adopt_instance(provider, root, target, state)
         typer.echo(f"{state.name}: adopted by {root}")
+
+
+@app.command("snapshot")
+def snapshot_command(
+    ctx: typer.Context,
+    name: str | None = typer.Argument(None, help="Snapshot name (default: timestamp)."),
+    target: str = typer.Option("dev", "--target", "-t"),
+    delete: bool = typer.Option(False, "--delete", help="Delete NAME instead."),
+) -> None:
+    """Snapshot an owned environment, or delete a snapshot."""
+    root = discover_project()
+    provider = IncusProvider(ctx.obj["runner"])
+    with target_lock(root, target):
+        state = require_instance(lookup(provider, root, target, require_schema=False))
+        if delete:
+            if name is None:
+                raise UsageError("--delete needs a snapshot NAME")
+            snapshots.find(provider, state, name)
+            provider.snapshot_delete(state.name, name)
+            typer.echo(f"{state.name}: deleted snapshot {name}")
+            return
+        chosen = snapshots.validate_name(name or snapshots.default_name())
+        snapshots.create(provider, state, chosen)
+        typer.echo(f"{state.name}: created snapshot {chosen}")
+
+
+@app.command("snapshots")
+def snapshots_command(
+    ctx: typer.Context, target: str = typer.Option("dev", "--target", "-t")
+) -> None:
+    """List the snapshots of an owned environment."""
+    root = discover_project()
+    provider = IncusProvider(ctx.obj["runner"])
+    state = require_instance(lookup(provider, root, target, require_schema=False))
+    found = provider.snapshot_list(state.name)
+    if not found:
+        typer.echo(f"{state.name}: no snapshots")
+    for item in found:
+        typer.echo(f"{item.name}  {item.created_at}")
+
+
+@app.command()
+def restore(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="Snapshot to roll back to."),
+    target: str = typer.Option("dev", "--target", "-t"),
+) -> None:
+    """Roll an owned environment back to a snapshot."""
+    root = discover_project()
+    runner = ctx.obj["runner"]
+    provider = IncusProvider(runner)
+    with target_lock(root, target):
+        state = require_instance(lookup(provider, root, target, require_schema=False))
+        snapshots.restore(provider, state, name, root)
+        after = provider.inspect(state.name)
+        if after is not None and after.status == "Running":
+            wait_ready(provider, state.name, after.kind, verbose=runner.verbose)
+        typer.echo(
+            f"{state.name}: restored snapshot {name}; "
+            "run nixant up to reconcile the configuration"
+        )

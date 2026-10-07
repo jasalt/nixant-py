@@ -4,7 +4,7 @@ NixOS development environments on local [Incus](https://linuxcontainers.org/incu
 
 You describe an environment as a `nixosConfiguration` in your project's flake. nixant builds it on the host, transfers the closure into an Incus container and activates it, then gives you a shell inside. The project checkout is mounted into the guest, so editors and tools on the host keep working.
 
-> Status: containers and VMs. Snapshots and ephemeral instances are not implemented yet.
+> Status: containers and VMs. Ephemeral instances are not implemented yet.
 
 ## Host requirements
 
@@ -56,6 +56,7 @@ $ nixant config          # runtime JSON, project ID, instance name, mount source
 $ nixant restart         # restart (or start) without re-activating
 $ nixant down [--force]  # stop
 $ nixant destroy         # delete the instance and its host GC root
+$ nixant snapshot [NAME]  # snapshot (also: snapshots, restore NAME, snapshot NAME --delete)
 $ nixant name [NAME]     # give this checkout its own instance name (git config)
 $ nixant adopt           # attach an instance whose checkout moved
 ```

@@ -47,6 +47,13 @@ class MachineState:
 
 
 @dataclass(frozen=True)
+class Snapshot:
+    name: str
+    created_at: str = ""
+    stateful: bool = False
+
+
+@dataclass(frozen=True)
 class UserSpec:
     name: str
     uid: int
