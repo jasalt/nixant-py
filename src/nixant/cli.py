@@ -10,9 +10,9 @@ import click
 import typer
 from typer.core import TyperGroup
 
-from nixant.errors import NixantError, UsageError
+from nixant.errors import CommandError, NixantError, UsageError
 from nixant.nix.activate import activate, can_skip
-from nixant.nix.build import build
+from nixant.nix.build import build, gcroot_path
 from nixant.nix.eval import evaluate
 from nixant.ownership import PREFIX, lookup, metadata, require_instance, resolve
 from nixant.project import discover_project, resolve_mount_sources, target_lock
@@ -213,3 +213,47 @@ def exec_command(
 ) -> None:
     """Run a guest command, preserving its arguments and exit status."""
     _enter(ctx, target, command)
+
+
+@app.command()
+def down(
+    ctx: typer.Context,
+    target: str = typer.Argument("dev"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Stop an owned environment without evaluating its configuration."""
+    root = discover_project()
+    provider = IncusProvider(ctx.obj["runner"])
+    with target_lock(root, target):
+        state = require_instance(lookup(provider, root, target, require_schema=False))
+        if state.status == "Stopped":
+            typer.echo(f"{state.name}: already stopped")
+            return
+        if state.status == "Frozen" and not force:
+            provider.start(state.name)
+        try:
+            provider.stop(state.name, force=force)
+        except CommandError as exc:
+            raise NixantError(
+                f"could not stop {state.name} within 60s; "
+                f"run nixant down {target} --force\n{exc}"
+            ) from exc
+        typer.echo(f"{state.name}: stopped")
+
+
+@app.command()
+def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
+    """Delete an owned environment and its disposable host GC root."""
+    root = discover_project()
+    provider = IncusProvider(ctx.obj["runner"])
+    with target_lock(root, target):
+        state = lookup(provider, root, target, require_schema=False)
+        if state is None:
+            typer.echo(f"{target}: not created")
+        else:
+            provider.destroy(state.name)
+            typer.echo(f"{state.name}: destroyed")
+        try:
+            gcroot_path(root, target).unlink(missing_ok=True)
+        except OSError as exc:
+            raise NixantError(f"cannot remove GC root: {exc}") from exc
