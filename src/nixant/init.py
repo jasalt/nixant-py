@@ -58,8 +58,18 @@ def pin_url(url: str, revision: str) -> str:
             raise UsageError(
                 f"cannot pin NIXANT_FLAKE_URL {url!r}: expected owner/repo"
             )
+        # A path revision conflicts with ref/rev selectors; keep other parameters.
+        query = [
+            (k, v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k not in ("ref", "rev")
+        ]
         return urlunsplit(
-            parts._replace(path="/".join([*segments[:2], revision]), fragment="")
+            parts._replace(
+                path="/".join([*segments[:2], revision]),
+                query=urlencode(query, quote_via=quote, safe="/"),
+                fragment="",
+            )
         )
     if scheme.startswith(("git+", "hg+")) or scheme == "git":
         query = [

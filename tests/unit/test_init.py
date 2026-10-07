@@ -307,3 +307,19 @@ def test_unsupported_url_fails_before_writing(tmp_path: Path, url: str) -> None:
     with pytest.raises(UsageError, match="cannot pin"):
         init_project(tmp_path, "default", fake_runner(tmp_path), Mock(), env)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("scheme", ["github", "gitlab", "sourcehut"])
+@pytest.mark.parametrize(
+    ("query", "kept"),
+    [
+        ("?ref=main", ""),
+        ("?rev=old&dir=flake", "?dir=flake"),
+        ("?host=h&ref=x", "?host=h"),
+    ],
+)
+def test_hosted_pin_drops_conflicting_selectors(
+    scheme: str, query: str, kept: str
+) -> None:
+    pinned = pin_url(f"{scheme}:o/r{query}", "a" * 40)
+    assert pinned == f"{scheme}:o/r/{'a' * 40}{kept}"
