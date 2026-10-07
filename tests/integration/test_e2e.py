@@ -1,12 +1,14 @@
 import os
 import signal
+import socket
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
 
-from .conftest import Project, cleanup, instance_created_at, new_project
+from .conftest import Project, cleanup, incus, instance_created_at, new_project
 
 pytestmark = pytest.mark.integration
 
@@ -176,3 +178,78 @@ def with_second_target(text: str) -> str:
         "nixosConfigurations.dev", "nixosConfigurations.other"
     )
     return text[:end] + "    " + block + text[end:]
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def test_machine_settings_reconcile(project: Project, tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "hello").write_text("hi")
+    port = free_port()
+
+    def settings(cpus: int, disk: str, ports: bool = True, mount: bool = True) -> str:
+        return (
+            f"{{ pkgs, ... }}: {{ nixant.user.uid = {os.getuid()}; "
+            f"environment.systemPackages = [ pkgs.python3 ]; nixant.cpus = {cpus}; "
+            f'nixant.memory = "1GiB"; nixant.disk = "{disk}"; '
+            + (
+                f"nixant.ports = [ {{ host = {port}; guest = 8080; }} ]; "
+                if ports
+                else ""
+            )
+            + (
+                f'nixant.mounts.data = {{ source = "{data}"; target = "/data"; '
+                "readOnly = true; }; "
+                if mount
+                else ""
+            )
+            + "}\n"
+        )
+
+    project.write_module(settings(2, "20GiB"))
+    project.nixant("up")
+    assert project.incus_config("limits.cpu") == "2"
+    assert project.exec("nproc").stdout.strip() == "2"
+    assert int(project.incus_config("limits.memory").removesuffix("B")) == 2**30
+    root = incus("config", "device", "get", f"local:{project.instance}", "root", "size")
+    assert (
+        int(root.stdout.strip().removesuffix("B")) == 20 * 2**30 or "20" in root.stdout
+    )
+    assert project.exec("cat", "/data/hello").stdout == "hi"
+    assert project.exec("touch", "/data/x", check=False).returncode != 0
+
+    # The forwarded port reaches a guest service.
+    project.exec("sh", "-c", "nohup python3 -m http.server 8080 >/dev/null 2>&1 &")
+    deadline = time.monotonic() + 30
+    body = ""
+    while time.monotonic() < deadline and "Directory listing" not in body:
+        try:
+            body = (
+                urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=2)
+                .read()
+                .decode()
+            )
+        except OSError:
+            time.sleep(0.5)
+    assert "Directory listing" in body
+
+    # Live changes: grow the disk, change limits, drop the port and the mount.
+    project.write_module(settings(1, "24GiB", ports=False, mount=False))
+    project.nixant("up")
+    assert project.incus_config("limits.cpu") == "1"
+    assert project.exec("nproc").stdout.strip() == "1"
+    assert project.exec("test", "-e", "/data/hello", check=False).returncode != 0
+    devices = incus("config", "device", "list", f"local:{project.instance}").stdout
+    assert "nixant-port" not in devices and "nixant-mount-data" not in devices
+
+    # Shrinking is refused and leaves everything as it was.
+    project.write_module(settings(1, "10GiB", ports=False, mount=False))
+    refused = project.nixant("up", check=False)
+    assert refused.returncode != 0
+    assert "cannot shrink" in refused.stderr + refused.stdout
+    assert project.incus_config("limits.cpu") == "1"
