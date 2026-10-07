@@ -235,60 +235,65 @@ next: nixant up
                                                      (fail: target missing / module not imported)
 2. check user.uid == os.getuid()                     (fail with the option to set)
 3. nix build toplevel --out-link $XDG_STATE_HOME/nixant/gcroots/<project-id>-<target>
-4. resolve instance name; inspect instance
-     exists + not ours        → fail (see Ownership)
+4. resolve the instance (see Instance lookup, evaluating form)
      exists + kind differs    → fail: "destroy and up to change kind"
      missing                  → create (stopped) with metadata, nesting, devices
 5. reconcile devices/limits (Phase 2; Phase 1 only ensures the workspace mount)
 6. start if stopped; readiness
-7. activate (skip if /run/current-system already equals the built path)
-8. set user.nixant.system=<path>; print name, target, IPv4, `nixant shell` hint
+7. activate, unless the skip condition holds (see Activation)
+8. print name, target, IPv4, `nixant shell` hint
 ```
 
-Steps 1–3 run before any Incus mutation, so a broken config never leaves a half-created instance. If step 7 fails the instance stays running; the message says to fix the config and run `nixant rebuild`.
+Steps 1–3 run before any Incus mutation, so a broken config never leaves a half-created instance. If step 7 fails the instance stays running and the recorded activation state is not `ok`, so the next `up` retries; the message says to fix the config and run `nixant rebuild`.
 
 Instance states: `Running` → continue; `Stopped` → start; `Frozen` → `incus start` (resumes); `Error` or anything else → fail and print the state.
 
 ### `rebuild`
 
-Steps 1–3 and 7–8 of `up`. Requires an owned, running instance; otherwise `instance <name> is not running; run nixant up`. Warns (does not apply) when outer settings differ from the instance.
+Steps 1–3 and 7–8 of `up`, but always activates (never takes the skip shortcut), so it is the explicit retry. Requires an owned, running instance; otherwise `instance <name> is not running; run nixant up`. Warns (does not apply) when outer settings differ from the instance.
 
 ### `shell`
 
-Requires owned, running instance (no auto-start). Replaces the process with:
+Does not evaluate; finds the instance by metadata (see Instance lookup). Requires a running instance (no auto-start) and a recorded successful activation (`user.nixant.user` set); otherwise `no successful activation yet; run nixant up`. Replaces the process with:
 
 ```text
-incus exec NAME --user UID --group GID --cwd WORKDIR --env HOME=HOME -- SHELL -l
+incus exec local:NAME --cwd WORKDIR -- /run/current-system/sw/bin/runuser -u USER -- \
+  /run/current-system/sw/bin/bash -c 'exec -l "$(getent passwd "$(id -un)" | cut -d: -f7)"'
 ```
 
-`incus shell` is not used: it runs `su -l` and lands in the home directory.
+- `USER` and `WORKDIR` come from `user.nixant.user` / `user.nixant.workdir`.
+- `runuser -u` initializes supplementary groups and sets `HOME`, and keeps the working directory. `incus exec --user/--group` does neither (tested: `groups=1000(dev)` without `wheel`, `HOME` empty).
+- `exec -l` starts the user's configured login shell with a `-` argv0, so bash, zsh, and fish all start as login shells.
+- `incus shell` is not used: it runs `su -l` and lands in the home directory.
 
 ### `exec`
 
-Same preconditions. Runs through a login shell so `/etc/profile` (wrappers, user PATH) applies, without re-quoting:
+Same lookup and preconditions. Always uses bash as the execution shell, independent of the user's interactive shell, so the wrapper is valid whatever `users.users.<name>.shell` is:
 
 ```text
-incus exec NAME --user UID --group GID --cwd WORKDIR --env HOME=HOME -- \
-  SHELL -lc 'exec "$@"' nixant CMD...
+incus exec local:NAME --cwd WORKDIR -- /run/current-system/sw/bin/runuser -u USER -- \
+  /run/current-system/sw/bin/bash -lc 'exec "$@"' nixant CMD...
 ```
+
+The bash login sources `/etc/profile` (NixOS environment, `/run/wrappers/bin`). Settings defined only in the user's non-bash shell config (e.g. fish-only variables) do not apply to `exec`; documented.
 
 `incus exec` auto-detects TTY, so piping works.
 
 ### `down`, `restart`, `destroy`
 
-Ownership required. `down` is idempotent when stopped. `destroy` = `incus delete --force`; succeeds with a note if the instance does not exist; no prompt. Removes the GC-root symlink.
+Do not evaluate; find the instance by metadata, so a broken or removed configuration never blocks cleanup. `down` is idempotent when stopped. `destroy` = `incus delete --force local:NAME`; succeeds with a note if no instance matches; no prompt. Removes the GC-root symlink.
 
 ### `status`
 
-Without a target: all instances where `user.nixant.project=<project-id>` (catches instances whose config was removed). With a target: that instance. Output per instance:
+Does not evaluate or build. Without a target: all instances where `user.nixant.project=<project-id>` (catches instances whose config was removed). With a target: the metadata lookup for that target. Output per instance:
 
 ```text
 supplier-import-dev  RUNNING  container  10.102.97.182
-target: dev   system: …-nixos-system-supplier-import-dev-26.05 (current)
+target: dev   system: …-nixos-system-supplier-import-dev-26.05 (ok, current)
 root: /home/user/src/supplier-import
 ```
 
-`(current)` / `(outdated)` compares `user.nixant.system` with the GC-root symlink if present; no evaluation or build. Missing instance: `dev: not created`, exit 0.
+The first word in parentheses is `user.nixant.activation`. `current` / `outdated` compares `user.nixant.system` with the GC-root symlink if present. Missing instance: `dev: not created`, exit 0.
 
 ### `config`
 
@@ -296,7 +301,7 @@ Prints `nixant.runtime` JSON plus the resolved instance name and absolute mount 
 
 ### `adopt`
 
-For a moved checkout: if the instance exists, is `managed`, and its `user.nixant.root` no longer exists, rewrite `project`/`root` and mount sources to the current root. Refuses if the old root still exists.
+`nixant adopt [TARGET] [--instance NAME]`. For a moved checkout. Candidates: managed instances with `user.nixant.target=<TARGET>` whose `user.nixant.root` no longer exists. Exactly one candidate, or the one named by `--instance`: rewrite `project`/`root` and mount sources to the current root. Several candidates without `--instance`: error listing them. Refuses if the old root still exists.
 
 ---
 
@@ -310,19 +315,46 @@ user.nixant.project=<project-id>
 user.nixant.root=<resolved project root>
 user.nixant.target=<target>
 user.nixant.schema=1
-user.nixant.system=<store path>        # updated after each activation
 ```
 
-Every command that touches an existing instance requires `managed=true` and `project` equal to the current project ID. Errors:
+Written by activation (see Activation):
+
+```text
+user.nixant.activation=pending|ok|degraded|failed
+user.nixant.system=<store path>        # last system activated with result ok or degraded
+user.nixant.user=<guest user name>     # used by shell/exec without evaluation
+user.nixant.workdir=<path>
+```
+
+An instance belongs to a target only if `managed=true`, `project` equals the current project ID, **and** `target` equals the target. Checking the project alone is not enough: two targets of one project can be configured with the same `instanceName`. Errors:
 
 ```text
 error: instance foo-dev exists but is not managed by nixant
 error: instance foo-dev belongs to /other/checkout; set nixant.instanceName or run nixant adopt
+error: instance foo-dev belongs to target test of this project; give dev a different nixant.instanceName
 ```
 
-Tool-managed devices are prefixed `nixant-` (e.g. `nixant-mount-workspace`, `nixant-port-8080`). Reconciliation only adds, changes, or removes prefixed devices.
+Tool-managed devices are prefixed `nixant-` (e.g. `nixant-mount-workspace`, `nixant-port-8080`). Reconciliation only adds, changes, or removes prefixed devices. Single exception: the instance-local `root` disk device, and only its `size` key (see Reconciliation). Profiles are never modified.
 
 No local state file. Snapshots (Phase 4) capture the keys with the instance.
+
+### Instance lookup
+
+**Metadata form** (`shell`, `exec`, `down`, `restart`, `destroy`, `status`, no evaluation): `incus list local: user.nixant.project=<id> user.nixant.target=<target> --format json`.
+
+- 0 matches → `dev: not created` (`destroy`: note, exit 0; others: `environment does not exist; run nixant up`).
+- 1 match → that instance.
+- More than 1 (e.g. `incus copy`, or an old instance left after `instanceName` changed) → error listing the names, suggesting `incus delete local:NAME` for the stale one.
+
+**Evaluating form** (`up`, `rebuild`): run the metadata lookup, then compare with the configured name `N`.
+
+| Metadata matches | Instance named `N` | Result |
+|---|---|---|
+| none | absent | create `N` |
+| none | exists | fail: not managed / other checkout / other target (errors above) |
+| exactly `N` | — | use it |
+| one, named `X ≠ N` | — | fail: `target dev's instance is X but the config now names N; run nixant destroy dev or restore nixant.instanceName` |
+| several | — | fail as in the metadata form |
 
 ---
 
@@ -336,19 +368,20 @@ class Provider(Protocol):
     def start(self, name: str) -> None: ...
     def stop(self, name: str) -> None: ...
     def destroy(self, name: str) -> None: ...
-    def run(self, name: str, argv: list[str], *, user: UserSpec | None = None,
+    def run(self, name: str, argv: list[str], *, user: str | None = None,
             cwd: str | None = None, stdin: IO[bytes] | None = None,
             capture: bool = False) -> CompletedProcess: ...
-    def exec_argv(self, name: str, argv: list[str], *, user: UserSpec, cwd: str) -> list[str]: ...
+    def exec_argv(self, name: str, argv: list[str], *, user: str, cwd: str) -> list[str]: ...
+    def find(self, metadata: dict[str, str]) -> list[MachineState]: ...
 ```
 
 `exec_argv` returns the argv for `os.execvp` (shell/exec); `run` is used for readiness and activation. Planning lives in `planner.py`, not in the provider.
 
 Command construction is confined to `providers/incus.py`:
 
-- Always address `local:` explicitly; use the current Incus project.
+- Always qualify instances as `local:NAME`; use the current Incus project.
 - Image: `images:nixos/unstable` (only bootstraps the guest; the flake pins the real system). `images:nixos/26.05` also exists.
-- Create: `incus create local:IMAGE NAME -c security.nesting=true -c user.nixant.*…`; add devices; then `incus start`.
+- Create: `incus create images:nixos/unstable local:NAME -c security.nesting=true -c user.nixant.*…`; add devices; then `incus start local:NAME`. The image is named with its `images:` remote and the destination with `local:`. A bare `local:IMAGE` would search the local image store instead.
 - VM (Phase 3): `--vm -c security.secureboot=false` (image declares `requirements.secureboot=false`).
 - Mounts (containers): `disk source=<abs> path=<target> shift=true [readonly=true]`. If adding with `shift=true` fails, stop with an error. Without shift, files appear as 65534 and are not writable. Verify the mount appeared and retry (see Relation to Incant).
 - Ports: `proxy listen=tcp:<address>:<host> connect=tcp:127.0.0.1:<guest>`.
@@ -360,18 +393,29 @@ Command construction is confined to `providers/incus.py`:
 paths   = nix-store -qR <toplevel>                                  (host)
 missing = run(guest, ["nix-store","--check-validity","--print-invalid", *paths])
 nix-store --export <missing> | run(guest, ["nix-store","--import"], stdin=pipe)
+set user.nixant.activation=pending
 run(guest, ["nix-env","-p","/nix/var/nix/profiles/system","--set",toplevel])
-run(guest, [toplevel+"/bin/switch-to-configuration","switch"])
+rc = run(guest, [toplevel+"/bin/switch-to-configuration","switch"])
+record result (below)
 ```
+
+Recording, based on the `switch-to-configuration` exit status:
+
+| Exit | `activation` | Also set | CLI result |
+|---|---|---|---|
+| 0 | `ok` | `system`, `user`, `workdir` | success |
+| 4 (some units failed) | `degraded` | `system`, `user`, `workdir` | warning, failed units listed, exit 0 |
+| other / interrupted / import failed | `failed` (or stays `pending`) | nothing else | error, exit 1 |
+
+Skip condition (`up` only): skip activation only if `activation=ok` **and** `system` equals the built path **and** `/run/current-system` equals the built path. `/run/current-system` alone is not evidence of success: the activation script updates it before `switch-to-configuration` finishes restarting units, so a failed switch can leave it pointing at the new system. `degraded`, `failed`, and `pending` never skip, so `up` retries them. `rebuild` never skips.
 
 - Guest root is a trusted Nix user, so unsigned imports work. Tested with an 8-path closure on Nix 2.34.
 - No flakes or `NIX_CONFIG` in the guest; the guest never evaluates.
 - Output of `switch-to-configuration` stays visible; export/import shows a path count and byte total in verbose mode.
-- `switch-to-configuration` exit status 4 (some units failed) is reported as a warning, not a failure.
 
 ## Readiness
 
-1. Retry `incus exec NAME -- true` (handles `VM agent isn't currently running`).
+1. Retry `incus exec local:NAME -- true` (handles `VM agent isn't currently running`).
 2. `systemctl is-system-running --wait`; accept `running` or `degraded`, print failed units on `degraded` in verbose mode.
 3. Timeout: 60s container, 180s VM; error names the instance and the last observed state.
 
@@ -382,7 +426,7 @@ Run after every start and before activation.
 | Field | Container | VM |
 |---|---|---|
 | cpus, memory | live | live (memory may need restart; verify) |
-| disk grow | live | live |
+| disk grow | live (see Root disk) | live (see Root disk) |
 | disk shrink | unsupported → error | unsupported → error |
 | mounts add/change/remove | live | restart (verify hotplug) |
 | ports | live | live (verify NAT-mode requirement) |
@@ -390,6 +434,16 @@ Run after every start and before activation.
 | user, NixOS config | activation | activation |
 
 `up` applies live changes, prints restart-required changes and applies them only if the instance was stopped, and refuses recreate-required changes.
+
+### Root disk
+
+The root disk comes from the default profile, so it is not a `nixant-` device.
+
+- At creation with `nixant.disk` set: `incus create … -d root,size=<bytes>`. This makes an instance-local override of the inherited device.
+- Later changes: if `root` is still inherited, `incus config device override local:NAME root size=<bytes>`. Otherwise `incus config device set local:NAME root size=<bytes>`.
+- nixant only touches the `size` key of the instance-local `root` device. It never edits the profile, which is shared with unrelated instances.
+- `nixant.disk = null` leaves the root device alone. An existing override is not removed.
+- Pools without quota support: before applying, read the root pool's driver (`incus storage show`). If the driver cannot enforce a size limit (`dir`), fail with `nixant.disk is not supported on storage pool <pool> (driver dir); unset it or use a btrfs/zfs/lvm pool`. Never silently ignore the setting. Exact per-driver support to be verified in Phase 2.
 
 ---
 
@@ -457,7 +511,19 @@ Only if needed; use it to reshape `Provider`.
 
 - Unit tests, with the runner mocked: discovery, project ID, instance-name derivation and sanitization, mount resolution, untracked pre-flight (temporary git repo), runtime-JSON → dataclass mapping, ownership checks, Incus argv construction, planner classification, `exec` argv parsing, `init` with and without an existing `flake.nix`.
 - Nix tests: `nix flake check` on the tool flake, plus `nix eval --json` of the example's `nixant.runtime` compared against a golden file. Also check that path-valued mount sources and bad sizes are rejected, and that every template evaluates.
-- Integration (gated on `NIXANT_INTEGRATION=1`; runnable in the Lima VM): temporary git repo → `init` → `up`, `exec -- hostname`, `exec -- touch /workspace/x` (host sees own UID), `exec -- sudo true`, edit config, `rebuild` (instance creation time unchanged), `down`, `up`, `status`, `destroy`.
+- Unit tests, ownership and lookup (mocked `incus list`/`query` output):
+  - Two targets with the same `instanceName`: the second `up` fails and the second target's `rebuild`/`destroy` never touch the first target's instance.
+  - Every row of the evaluating-lookup table; 0/1/many metadata matches.
+  - Ownership check rejects a project-ID match when the target differs.
+- Unit tests, activation recording: exit 0 → `ok`; exit 4 → `degraded`; other exit, import failure, or interruption → never `ok`. The skip condition is false unless all three parts hold, and `rebuild` never skips.
+- Integration (gated on `NIXANT_INTEGRATION=1`; runnable in the Lima VM):
+  - Happy path: temporary git repo → `init` → `up`, `exec -- hostname`, `exec -- touch /workspace/x` (host sees own UID), `exec -- sudo true`, `exec -- id -Gn` (includes `wheel`), edit config, `rebuild` (instance creation time unchanged), `down`, `up`, `status`, `destroy`.
+  - Failure recovery:
+    - Add a systemd service that fails → `up` reports `degraded`; a second `up` re-activates instead of skipping; fixing the service → `ok`.
+    - Interrupt `up` during import → `up` again completes.
+    - Introduce a Nix syntax error → `status`, `down`, `destroy` still work.
+  - Cross-target: two targets with distinct names coexist; giving them the same `instanceName` makes the second `up` fail without modifying the first instance.
+  - Shell independence: set the user's shell to fish → `exec -- true` still works, and `shell` starts fish.
 
 ## Verified during review
 
@@ -470,6 +536,8 @@ Only if needed; use it to reshape `Provider`.
 - Flake `./.` / `toString ./.` evaluate to a store path.
 - Unsigned `nix-store --export | incus exec … nix-store --import` works as guest root.
 - Click treats `exec -- hostname` as a missing `COMMAND` and `exec -- ls -la` as target `ls`.
+- `incus exec --user 1000 --group 1000` gives `groups=1000(dev)` (no `wheel`) and an empty `HOME`. `runuser -u dev` gives `groups=1000(dev),1(wheel)`, `HOME=/home/dev`, keeps `--cwd`, and works with a TTY.
+- `incus create images:nixos/unstable local:NAME` works.
 
 ## To verify early
 
@@ -477,6 +545,8 @@ Only if needed; use it to reshape `Provider`.
 - Eval time of `config.nixant.runtime` (it runs the NixOS module system on every command that evaluates).
 - Whether `security.nesting=true` is strictly required for NixOS containers.
 - Hostname handling: `networking.hostName` vs Incus-set hostname.
+- Exactly when the activation script updates `/run/current-system` relative to unit restarts. The skip condition does not depend on the answer, but error messages might.
+- Root-disk `size` support per storage driver (Phase 2).
 - VM: module name/path for the Incus VM profile, mount hotplug, proxy NAT-mode requirement.
 
 ## Deferred: personalization
