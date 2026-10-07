@@ -20,7 +20,7 @@ Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs
 | 1 | Mount sources | Strings in Nix; relative ones resolved by Python against the project root |
 | 2 | Schema | Plain `nixosConfigurations.<target>` + `nixant.nixosModules.{container,vm}` declaring `nixant.*` options |
 | 3 | Transport | Build on host; stream missing paths through `incus exec` stdin; activate with `switch-to-configuration` |
-| 4 | Naming | `nixant.instanceName` (default: target attribute name); ownership verified via metadata |
+| 4 | Naming | `nixant.instanceName`, default `<project dir>-<target>` (sanitized); ownership verified via metadata |
 | 5 | State | Incus `user.nixant.*` keys only; host GC root under XDG state as a disposable cache |
 | 6 | Backend | `Provider` protocol, Incus as the only implementation |
 | 7 | Guest user | `nixant.user` with host UID; CLI verifies `uid == os.getuid()` |
@@ -31,6 +31,11 @@ Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs
 | 8 | Ordering | Evaluate and build before touching Incus |
 | 8 | Models | Frozen `dataclasses`; no Pydantic |
 | 8 | Phase 1 | Includes NixOS activation |
+| 9 | Guest sudo | `nixant.user` gets passwordless sudo |
+| 10 | Project start | `nixant init [TEMPLATE]` wrapping Nix flake templates exported by the nixant flake |
+| 11 | Untracked files | Pre-flight warning for untracked `*.nix` / `flake.lock` before every evaluation |
+| 12 | Personalization | Deferred (per-person dotfiles, host UID injection); see Deferred |
+| 13 | SSH agent, git identity | Out of scope |
 
 ---
 
@@ -61,6 +66,9 @@ Host requirements: Linux x86_64, multi-user Nix with flakes, Incus with the `loc
 nixosModules.container   # imports lxc-container.nix + base networking + nixant options
 nixosModules.vm          # imports the Incus VM module (agent, boot) + nixant options   (Phase 3)
 nixosModules.options     # option declarations only (imported by both)
+templates.default        # minimal container project (Phase 1)
+templates.node           # + nodejs                  (Phase 2)
+templates.python         # + python3, uv             (Phase 2)
 ```
 
 `imports` cannot depend on `config`, so the instance kind is chosen by which module is imported and reported as `config.boot.isContainer`. Kind mismatch between config and instance is therefore impossible to express in Nix; the CLI only has to compare it with an existing instance.
@@ -69,7 +77,7 @@ The container module must preserve what the stock image's `/etc/nixos/configurat
 
 - `${modulesPath}/virtualisation/lxc-container.nix`
 - `systemd.network` DHCP on `eth0`, `networking.useDHCP = false`, `useHostResolvConf = false`
-- `networking.hostName` from `nixant.instanceName` when set
+- `networking.hostName` from `nixant.instanceName` when set; otherwise left to Incus (the CLI-derived default name is not visible to Nix)
 
 The VM module must keep `incus-agent` enabled; without it the CLI loses `incus exec` after the first switch.
 
@@ -78,10 +86,11 @@ The VM module must keep `incus-agent` enabled; without it the CLI loses `incus e
 ```nix
 nixant = {
   enable = true;                       # set by the tool modules; marks a nixant target
-  instanceName = null;                 # null → CLI uses the target attribute name
+  instanceName = null;                 # null → CLI uses <project dir>-<target>
   user = {
     name = "dev";
     uid = 1000;                        # must equal the host UID; CLI checks
+    sudo = true;                       # passwordless sudo
     # standard NixOS/home-manager config attaches to users.users.dev / home-manager.users.dev
   };
   cpus = null;                         # Phase 2
@@ -93,7 +102,7 @@ nixant = {
 };
 ```
 
-`nixant.user` creates `users.users.<name>` (normal user, given UID, group with same GID, home `/home/<name>`). It is a convenience; users may extend it with any NixOS or home-manager config.
+`nixant.user` creates `users.users.<name>` (normal user, given UID, group with same GID, home `/home/<name>`, member of `wheel`). With `sudo = true` (default) it adds a `security.sudo.extraRules` NOPASSWD rule for that user only. It is a convenience; users may extend it with any NixOS or home-manager config.
 
 `nixant.runtime` (read-only, `nix eval --json`) contains:
 
@@ -133,7 +142,7 @@ Mount `source` must be a string. Nix path values (`./.`) evaluate to a `/nix/sto
         ./nix/dev.nix                                   # project role module
         {
           nixant.user.name = "dev";
-          home-manager.users.dev = import ./nix/home.nix;
+          home-manager.users.dev = import ./nix/home.nix;   # team-shared; personal dotfiles are deferred
           services.postgresql.enable = true;
           system.stateVersion = "26.05";
         }
@@ -145,13 +154,14 @@ Mount `source` must be a string. Nix path values (`./.`) evaluate to a `/nix/sto
 
 Reuse guidance (document, don't enforce): import role modules, not whole host configurations. Host configs carry `hardware-configuration.nix`, `boot.loader`, `fileSystems`, desktop settings that conflict with the container base. Home-manager configs are reusable when the dotfiles flake exports modules (`homeModules.*`) rather than only `homeConfigurations`.
 
-Ship this example in the repository; the integration test uses it.
+Ship this example in the repository; the integration test uses it. `templates.default` is a trimmed version of it (no home-manager, no postgresql).
 
 ---
 
 ## CLI
 
 ```text
+nixant init     [TEMPLATE] [--list]
 nixant up       [TARGET]
 nixant rebuild  [TARGET]
 nixant shell    [TARGET]
@@ -175,6 +185,20 @@ Walk up from the current directory to the nearest `flake.nix`; that directory is
 
 Project ID: first 12 hex chars of SHA-256 of the resolved root path.
 
+Instance name: `nixant.instanceName` if set, else `<root dir name>-<target>`, sanitized: lowercase, runs of characters outside `[a-z0-9]` become `-`, leading digits/dashes stripped (prefix `n` if nothing remains), truncated to 63 chars without a trailing dash. Two projects with the same directory name clash; the ownership check reports it and suggests setting `nixant.instanceName`.
+
+### Untracked-file pre-flight
+
+Before every evaluation (`up`, `rebuild`, `config`): if the root is inside a git work tree, run `git ls-files --others --exclude-standard -- '*.nix' flake.lock` from the root. If anything is listed, warn:
+
+```text
+warning: Nix ignores files not tracked by git:
+  nix/dev.nix
+run: git add nix/dev.nix
+```
+
+Warning only; evaluation proceeds (it may still succeed without the file). If the root is not in a git work tree, warn once per command that Nix will copy the entire directory into the store on every evaluation.
+
 ### Exit codes
 
 `0` success · `1` expected tool error (concise message, stderr of the failing subprocess included where useful) · `2` usage error · `shell`/`exec`: the guest command's status (process replaced via `os.execvp`).
@@ -183,10 +207,32 @@ Project ID: first 12 hex chars of SHA-256 of the resolved root path.
 
 ## Command behavior
 
+### `init`
+
+```console
+$ nixant init --list
+default   minimal container, user with sudo
+node      + nodejs
+python    + python3, uv
+
+$ nixant init            # = nixant init default
+wrote flake.nix nix/dev.nix
+added to git: flake.nix nix/dev.nix
+next: nixant up
+```
+
+- Runs in the current directory; no project discovery.
+- Template source: the nixant flake the CLI was built from. The package bakes in its own source store path, so `init` works offline and templates always match the CLI version. `--list` reads `templates` descriptions via `nix eval --json`.
+- Runs `nix flake init -t <self>#<TEMPLATE>`, then makes sure the created files are tracked if the directory is a git work tree. Outside git, prints the whole-directory-copy warning and suggests `git init`.
+- The template's `nixant.url` is unversioned. `init` runs `nix flake lock` so the lock file pins it immediately, and tracks `flake.lock` too. A later CLI/library mismatch is caught by `schemaVersion`; the error suggests `nix flake update nixant` or upgrading the CLI.
+- If `flake.nix` already exists, nothing is written. It prints the inputs and `nixosConfigurations.dev` block to add by hand; the snippets ship as package data next to the templates.
+- Unknown template: error listing the available names.
+
 ### `up`
 
 ```text
-1. discover project, eval nixant.runtime            (fail: target missing / module not imported)
+1. discover project, untracked-file pre-flight, eval nixant.runtime
+                                                     (fail: target missing / module not imported)
 2. check user.uid == os.getuid()                     (fail with the option to set)
 3. nix build toplevel --out-link $XDG_STATE_HOME/nixant/gcroots/<project-id>-<target>
 4. resolve instance name; inspect instance
@@ -352,11 +398,14 @@ Run after every start and before activation.
 ```text
 flake.nix                  # dev shell, package, nixosModules.*
 nix/modules/{options,container,vm}.nix
+nix/templates/{default,node,python}/   # flake templates
+nix/snippets/{default,node,python}.nix # printed by `init` when flake.nix exists
 examples/basic/flake.nix
 src/nixant/
   __main__.py
   cli.py                   # Typer app, error → exit code mapping
-  project.py               # discovery, project ID, instance name, mount path resolution
+  project.py               # discovery, project ID, instance name, mount path resolution, untracked pre-flight
+  init.py                  # template listing, nix flake init, snippets
   models.py                # frozen dataclasses: MachineSpec, MountSpec, PortSpec, UserSpec, MachineState
   errors.py
   run.py                   # single subprocess runner (verbose echo, capture, stdin)
@@ -384,11 +433,11 @@ No Incant code is reused; everything is written fresh. Behavior carried over as 
 
 ### Phase 1: vertical slice (containers)
 
-Nix options module and container module, example flake, discovery, eval, host build, ownership metadata, create, workspace mount, readiness, activation, `nixant.user`, `up`, `rebuild`, `shell`, `exec`, `down`, `destroy`, `status`, `config`.
+Nix options module and container module, example flake, `templates.default`, discovery, untracked pre-flight, eval, host build, ownership metadata, create, workspace mount, readiness, activation, `nixant.user` (with sudo), `init`, `up`, `rebuild`, `shell`, `exec`, `down`, `destroy`, `status`, `config`.
 
 ### Phase 2: machine settings
 
-cpus/memory/disk limits, ports, multiple and read-only mounts, planner with classification, `restart`, `adopt`.
+cpus/memory/disk limits, ports, multiple and read-only mounts, planner with classification, `restart`, `adopt`, `node` and `python` templates.
 
 ### Phase 3: VMs
 
@@ -406,9 +455,9 @@ Only if needed; use it to reshape `Provider`.
 
 ## Testing
 
-- Unit tests, with the runner mocked: discovery, project ID, instance-name rules, mount resolution, runtime-JSON → dataclass mapping, ownership checks, Incus argv construction, planner classification, `exec` argv parsing.
-- Nix tests: `nix flake check` on the tool flake, plus `nix eval --json` of the example's `nixant.runtime` compared against a golden file. Also check that path-valued mount sources and bad sizes are rejected.
-- Integration (gated on `NIXANT_INTEGRATION=1`; runnable in the Lima VM): example flake → `up`, `exec -- hostname`, `exec -- touch /workspace/x` (host sees own UID), edit config, `rebuild` (instance creation time unchanged), `down`, `up`, `status`, `destroy`.
+- Unit tests, with the runner mocked: discovery, project ID, instance-name derivation and sanitization, mount resolution, untracked pre-flight (temporary git repo), runtime-JSON → dataclass mapping, ownership checks, Incus argv construction, planner classification, `exec` argv parsing, `init` with and without an existing `flake.nix`.
+- Nix tests: `nix flake check` on the tool flake, plus `nix eval --json` of the example's `nixant.runtime` compared against a golden file. Also check that path-valued mount sources and bad sizes are rejected, and that every template evaluates.
+- Integration (gated on `NIXANT_INTEGRATION=1`; runnable in the Lima VM): temporary git repo → `init` → `up`, `exec -- hostname`, `exec -- touch /workspace/x` (host sees own UID), `exec -- sudo true`, edit config, `rebuild` (instance creation time unchanged), `down`, `up`, `status`, `destroy`.
 
 ## Verified during review
 
@@ -430,6 +479,18 @@ Only if needed; use it to reshape `Provider`.
 - Hostname handling: `networking.hostName` vs Incus-set hostname.
 - VM: module name/path for the Incus VM profile, mount hotplug, proxy NAT-mode requirement.
 
+## Deferred: personalization
+
+Per-person settings stay out of the shared project flake, so nixant has no mechanism for them yet. Interim behavior: the shared config sets `nixant.user.uid` (default 1000). A developer whose host UID differs gets the UID-mismatch error and has to change the shared value. Personal dotfiles can only be added as team-shared home-manager config.
+
+A git-ignored `local.nix` cannot be the answer: git flakes do not see untracked or ignored files.
+
+Future options:
+
+1. **CLI injects via `extendModules`.** Build `nixosConfigurations.<t>.extendModules { modules = [ { nixant.user.uid = <host uid>; nixant.user.name = <host user>; } ~/.config/nixant/user.nix ]; }` with an impure `--expr`. The UID never appears in the repo. The personal module cannot bring its own flake inputs, and the Nix eval cache is lost.
+2. **Personal flake via `--override-input`.** The tool modules read an `nixant-user` input defaulting to an empty flake shipped by nixant; the CLI passes `--override-input nixant-user ~/.config/nixant` when it exists. The personal flake can have its own inputs (dotfiles, home-manager), and evaluation stays pure, but it needs more wiring and care to avoid writing the override into `flake.lock`.
+3. **UID-only injection.** Option 1 restricted to `uid`/`name`; dotfiles remain a team decision.
+
 ## Non-goals
 
-Arbitrary guest OSes, provisioners, plugin loading, remote Incus, custom networks/storage pools, image building, generic infrastructure planning, provider feature parity, Incus config passthrough, secrets management, macOS.
+Arbitrary guest OSes, provisioners, plugin loading, remote Incus, custom networks/storage pools, image building, generic infrastructure planning, provider feature parity, Incus config passthrough, secrets management, macOS, SSH agent forwarding, git identity/credentials inside the guest.
