@@ -33,9 +33,19 @@
       nixosModules.container = import ./nix/modules/container.nix;
       nixosModules.options = import ./nix/modules/options.nix;
 
-      templates.default = {
-        path = ./nix/templates/default;
-        description = "Minimal NixOS container with a sudo user";
+      templates = {
+        default = {
+          path = ./nix/templates/default;
+          description = "Minimal NixOS container with a sudo user";
+        };
+        node = {
+          path = ./nix/templates/node;
+          description = "Default container plus Node.js";
+        };
+        python = {
+          path = ./nix/templates/python;
+          description = "Default container plus Python 3 and uv";
+        };
       };
 
       checks.${system} = {

@@ -4,7 +4,7 @@ NixOS development environments on local [Incus](https://linuxcontainers.org/incu
 
 You describe an environment as a `nixosConfiguration` in your project's flake. nixant builds it on the host, transfers the closure into an Incus container and activates it, then gives you a shell inside. The project checkout is mounted into the guest, so editors and tools on the host keep working.
 
-> Status: Phase 1 (containers). `restart`, `name` and `adopt` are not implemented yet; the commands below are the ones that exist.
+> Status: containers only. VMs, snapshots and ephemeral instances are not implemented yet.
 
 ## Host requirements
 
@@ -18,7 +18,7 @@ nixant never changes Incus server configuration.
 
 ## Project setup
 
-Run `nixant init` in an empty project directory (`nixant init --list` shows templates). It writes `flake.nix` and `nix/dev.nix`, proposes `nixant.instanceName = "<dir>-dev"` (sanitized for Incus, with a warning if that instance already exists), locks the inputs, and stages the files in git when the directory is a work tree. If the lock step fails (for example offline), the files are kept and the exact `nix flake lock` command is printed.
+Run `nixant init` in an empty project directory (`nixant init --list` shows the `default`, `node` and `python` templates). It writes `flake.nix` and `nix/dev.nix`, proposes `nixant.instanceName = "<dir>-dev"` (sanitized for Incus, with a warning if that instance already exists), locks the inputs, and stages the files in git when the directory is a work tree. If the lock step fails (for example offline), the files are kept and the exact `nix flake lock` command is printed.
 
 The generated `nixant` input points at the nixant source the CLI was built from, so project and CLI match. A package can declare a canonical URL by setting `NIXANT_FLAKE_URL` (and `NIXANT_REV`); `init` then writes that URL and pins the lock to the CLI's revision (`github:`, `gitlab:`, `sourcehut:` and `git+*://` URLs are supported; anything else is rejected before files are written).
 
@@ -53,8 +53,11 @@ $ nixant exec -- make    # run one command
 $ nixant rebuild         # re-build and always re-activate a running instance
 $ nixant status          # metadata and cached build state, no evaluation
 $ nixant config          # runtime JSON, project ID, instance name, mount sources
+$ nixant restart         # restart (or start) without re-activating
 $ nixant down [--force]  # stop
 $ nixant destroy         # delete the instance and its host GC root
+$ nixant name [NAME]     # give this checkout its own instance name (git config)
+$ nixant adopt           # attach an instance whose checkout moved
 ```
 
 Every command takes an optional target name (default `dev`). `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation.
@@ -110,8 +113,8 @@ On the host, only the latest build per target has a GC root.
 
 ## Limitations
 
-- Second checkout on the same host: the instance name comes from `nixant.instanceName`, so two checkouts of the same project collide. nixant refuses to operate on an instance owned by another checkout (`instance NAME belongs to /other/checkout`). Give the second checkout a different `instanceName` until `nixant name` exists.
-- Moving or renaming the checkout does not change the instance, but its recorded root path stays stale until `nixant adopt` exists.
+- Second checkout on the same host: the instance name comes from `nixant.instanceName`, so two checkouts of the same project collide. nixant refuses to operate on an instance owned by another checkout (`instance NAME belongs to /other/checkout`). Run `nixant name dev` in the second checkout to store its own name in that checkout's git config (per worktree in a multi-worktree repository). The override is invisible to Nix, so the guest hostname keeps the committed name.
+- Moved checkouts: the instance keeps working under its old record until you run `nixant adopt` in the new location, which rewrites the recorded root and mount sources. `nixant status --orphans` lists instances whose checkout no longer exists.
 - Guest `nixos-rebuild switch` is not supported. After the first activation `/etc/nixos/configuration.nix` is a stub that fails with a message pointing back at `nixant rebuild`.
 - Containers only for now; `nixant.kind = vm` is not implemented.
 - nixpkgs 26.05 or newer in the guest. Instances bootstrap from `images:nixos/unstable`, and only 26.05 and unstable images exist. Activating an older release (25.05 and 25.11 were tried) hangs: its `switch-to-configuration` stops `dbus-broker` and then loses its own D-Bus connection. The Nix modules reject older pins at evaluation time.
