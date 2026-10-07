@@ -15,3 +15,4 @@ dist/
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+examples/*/flake.lock

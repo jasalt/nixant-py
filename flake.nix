@@ -33,10 +33,20 @@
       nixosModules.container = import ./nix/modules/container.nix;
       nixosModules.options = import ./nix/modules/options.nix;
 
+      templates.default = {
+        path = ./nix/templates/default;
+        description = "Minimal NixOS container with a sudo user";
+      };
+
       checks.${system} = {
         package = self.packages.${system}.default;
         container = pkgs.runCommand "nixant-container-tests" {
           results = builtins.toJSON (import ./nix/tests/container.nix { inherit nixpkgs system; });
+        } ''
+          echo "$results" > "$out"
+        '';
+        templates = pkgs.runCommand "nixant-template-tests" {
+          results = builtins.toJSON (import ./nix/tests/templates.nix { inherit nixpkgs system; });
         } ''
           echo "$results" > "$out"
         '';

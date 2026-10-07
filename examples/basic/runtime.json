@@ -1,0 +1,1 @@
+{"cpus":null,"diskBytes":null,"instanceName":"shop-dev","kind":"container","memoryBytes":null,"mounts":{"workspace":{"readOnly":false,"source":".","target":"/workspace"}},"ports":[],"schemaVersion":1,"user":{"gid":1000,"home":"/home/dev","name":"dev","shell":"/run/current-system/sw/bin/bash","uid":1000},"workdir":"/workspace"}
