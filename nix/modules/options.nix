@@ -53,8 +53,8 @@ let
       message = "nixant.workdir must be an absolute path."; }
     { assertion = builtins.length hostPorts == builtins.length (lib.unique hostPorts);
       message = "nixant.ports host ports must be unique."; }
-    { assertion = lib.versionAtLeast lib.trivial.release "25.05";
-      message = "nixant requires nixpkgs 25.05 or newer (switch-to-configuration-ng)."; }
+    { assertion = lib.versionAtLeast lib.trivial.release "26.05";
+      message = "nixant requires nixpkgs 26.05 or newer: the bootstrap image is newer, and switching a guest down to an older release hangs in switch-to-configuration."; }
   ];
   errors = map (item: item.message) (builtins.filter (item: !item.assertion) validations);
   user = config.users.users.${cfg.user.name};

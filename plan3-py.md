@@ -87,7 +87,7 @@ The container module must preserve what the stock image's `/etc/nixos/configurat
 - `${modulesPath}/virtualisation/lxc-container.nix`
 - `systemd.network` DHCP on `eth0`, `networking.useDHCP = false`, `useHostResolvConf = false`
 - `networking.hostName = mkDefault config.nixant.instanceName`, so the hostname, the system store name (`…-nixos-system-<instanceName>-<release>`), and the Incus instance name are identical
-- the nixpkgs release assertion (≥ 25.05, see Activation)
+- the nixpkgs release assertion (≥ 26.05, see Activation)
 - guest Nix for the user (see below): `nix.settings.experimental-features = mkDefault [ "nix-command" "flakes" ]`
 - a stale-config guard for `/etc/nixos` (see below)
 
@@ -573,7 +573,7 @@ Recording, based on the `switch-to-configuration` exit status:
 
 **Concurrent switch in the guest.** `switch-to-configuration-ng` holds an exclusive non-blocking lock on `/run/nixos/switch-to-configuration.lock`. A second switch exits 1 with `Could not acquire lock`; nixant maps this to `another activation is running inside <name>`. The host-side target lock (see Locking) prevents this between nixant runs. The guest lock covers switches started by hand inside the guest.
 
-Exit-code meanings are from `switch-to-configuration-ng`. Supported guest nixpkgs is 25.05 or newer: `switch-to-configuration-ng` by default, and systemd ≥ 256, which `is-system-running --wait` needs. The tool modules assert `lib.versionAtLeast lib.trivial.release "25.05"`, so an older pin fails at evaluation with a clear message instead of misreporting activation results.
+Exit-code meanings are from `switch-to-configuration-ng`. Supported guest nixpkgs is 26.05 or newer (25.05 and 25.11 were tried from the unstable bootstrap image and `switch-to-configuration` hangs after stopping dbus-broker; only 26.05 and unstable images exist): `switch-to-configuration-ng` by default, and systemd ≥ 256, which `is-system-running --wait` needs. The tool modules assert `lib.versionAtLeast lib.trivial.release "25.05"`, so an older pin fails at evaluation with a clear message instead of misreporting activation results.
 
 Skip condition (`up` only): skip activation only if `activation=ok` **and** `system` equals the built path **and** `/run/current-system` equals the built path. `/run/current-system` alone is not evidence of success: the activation script updates it before `switch-to-configuration` finishes restarting units, so a failed switch can leave it pointing at the new system. `degraded`, `failed`, `pending`, and `reboot-required` never skip, so `up` retries them. `rebuild` never skips.
 
@@ -691,7 +691,7 @@ Only if needed; use it to reshape `Provider`.
 ## Testing
 
 - Unit tests, with the runner mocked: discovery, project ID, `init` name proposal and sanitization, mount resolution, untracked pre-flight (temporary git repo), runtime-JSON → dataclass mapping, ownership checks, Incus argv construction, planner classification, `exec` argv parsing, `init` with and without an existing `flake.nix`, `init` marker rewrite, `init` lock command with and without `NIXANT_REV`.
-- Nix tests: `nix flake check` on the tool flake, plus `nix eval --json` of the example's `nixant.runtime` compared against a golden file. Also check that every template evaluates, and that these are rejected: path-valued mount sources, bad sizes, a missing or invalid `instanceName`, `user.name = "root"`/`uid = 0`, and nixpkgs older than 25.05.
+- Nix tests: `nix flake check` on the tool flake, plus `nix eval --json` of the example's `nixant.runtime` compared against a golden file. Also check that every template evaluates, and that these are rejected: path-valued mount sources, bad sizes, a missing or invalid `instanceName`, `user.name = "root"`/`uid = 0`, and nixpkgs older than 26.05.
 - Unit tests, ownership and lookup (mocked `incus list`/`query` output):
   - Two targets with the same `instanceName`: the second `up` fails and the second target's `rebuild`/`destroy` never touch the first target's instance.
   - Every row of the evaluating-lookup table; 0/1/many metadata matches.
@@ -758,7 +758,7 @@ Own probes:
 
 - Eval time per command after the single-evaluation change (cold ~40s and warm "seconds" were measured on a forced full evaluation, not on `runtime` + `drvPath`).
 - Exactly when the activation script updates `/run/current-system` relative to unit restarts. The skip condition does not depend on the answer, but error messages might.
-- That nixpkgs 25.05 is the right minimum: `switch-to-configuration-ng` is the default there and its exit codes match the recording table. The degraded-service integration test covers this on the pinned version.
+- That nixpkgs 26.05 is the right minimum (verified; 25.05 and 25.11 hang when activated over the unstable image): `switch-to-configuration-ng` is the default there and its exit codes match the recording table. The degraded-service integration test covers this on the pinned version.
 - Clean `incus stop` duration for an idle NixOS container, to confirm the 60s `down` timeout is generous.
 - Exit-100 path in a container: that `switch` updates `/sbin/init` before exiting 100, so `incus restart` boots the new system. Hard to trigger on purpose; try a first activation from an old stock image to current nixpkgs, otherwise cover it with the unit tests only.
 - Root-disk `size` support per storage driver (Phase 2).

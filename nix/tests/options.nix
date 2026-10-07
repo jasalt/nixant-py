@@ -25,6 +25,8 @@ let
   rejects = extra: !succeeds (evaluate extra);
   tests = {
     oldRelease = !succeeds (evaluateWithLib (lib // { trivial = lib.trivial // { release = "24.11"; }; }) {});
+    oldStableRelease = !succeeds (evaluateWithLib (lib // { trivial = lib.trivial // { release = "25.11"; }; }) {});
+    minimumRelease = succeeds (evaluateWithLib (lib // { trivial = lib.trivial // { release = "26.05"; }; }) {});
     overflowSize = rejects { nixant.memory = "9223372036854775808B"; };
     overflowUnit = rejects { nixant.memory = "9223372036854775807GiB"; };
     golden = base == builtins.fromJSON (builtins.readFile ./runtime.json);

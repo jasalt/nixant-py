@@ -39,7 +39,7 @@ Rules enforced at evaluation time:
 - Mount `source` is a string. A Nix path such as `./.` is rejected, because it evaluates to a store copy instead of the checkout.
 - Mount targets are absolute and unique. Port numbers are in range and host ports are unique.
 - `user.name = "root"` and `uid = 0` are rejected.
-- The guest nixpkgs must be 25.05 or newer.
+- The guest nixpkgs must be 26.05 or newer (see Limitations).
 
 Everything else is ordinary NixOS and home-manager configuration, attached to `users.users.<name>` and `home-manager.users.<name>`.
 
@@ -95,7 +95,7 @@ On the host, only the latest build per target has a GC root.
 - Moving or renaming the checkout does not change the instance, but its recorded root path stays stale until `nixant adopt` exists.
 - Guest `nixos-rebuild switch` is not supported. After the first activation `/etc/nixos/configuration.nix` is a stub that fails with a message pointing back at `nixant rebuild`.
 - Phase 1 supports containers only. `cpus`, `memory`, `disk` and `ports` options are reserved for Phase 2.
-- nixpkgs 25.05 or newer in the guest: `switch-to-configuration-ng` and systemd 256+ are required for activation results to be reported correctly.
+- nixpkgs 26.05 or newer in the guest. Instances bootstrap from `images:nixos/unstable`, and only 26.05 and unstable images exist. Activating an older release (25.05 and 25.11 were tried) hangs: its `switch-to-configuration` stops `dbus-broker` and then loses its own D-Bus connection. The Nix modules reject older pins at evaluation time.
 
 ## Development
 

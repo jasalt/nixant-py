@@ -102,6 +102,9 @@ def new_project(tmp_path: Path, label: str) -> Project:
         f'nixant.instanceName = "{instance}";',
         flake,
     )
+    pinned = os.environ.get("NIXANT_IT_NIXPKGS")
+    if pinned:  # e.g. github:NixOS/nixpkgs/nixos-26.05 to check the supported minimum
+        flake = re.sub(r'nixpkgs\.url = "[^"]*";', f'nixpkgs.url = "{pinned}";', flake)
     (root / "flake.nix").write_text(flake)
     project.write_module(f"{{ nixant.user.uid = {os.getuid()}; }}\n", name="extra")
     return project
