@@ -44,6 +44,7 @@ copy_core() {
   if [ "$installed" = "$core_id" ]; then
     return
   fi
+  [ -e "$core/wp-includes/version.php" ] || die "$core is not a WordPress core (no wp-includes/version.php)"
   echo "wp-site: installing WordPress core ($core_id)"
   mkdir -p "$root"
   rsync -rltp --chmod=Du=rwx,Dg=rx,Fu=rw,Fg=r --delete \
@@ -108,6 +109,7 @@ REPORT
 
 setup() {
   load_settings
+  set -o errtrace # so the trap also covers the functions below
   trap 'echo "wp-site: setup failed at: $BASH_COMMAND" >&2' ERR
   copy_core
   configure
