@@ -82,6 +82,11 @@ let
     in path {} != path { extra.wordpress.title = "Other"; };
     coreIncludesThemes = builtins.pathExists "${base.package}/wp-content/themes/twentytwentyfive";
     dotfilesHidden = lib.hasInfix "respond @dotfiles 404" base_.config.services.caddy.virtualHosts.":80".extraConfig;
+    caddyBindsLoopback = lib.hasInfix "bind 127.0.0.1\n" base_.config.services.caddy.virtualHosts.":80".extraConfig
+      && (settingsOf base_).httpAddress == "127.0.0.1";
+    caddyListensEverywhere = let system = evaluate { extra.wordpress.listenAddress = null; }; in
+      !(lib.hasInfix "bind " system.config.services.caddy.virtualHosts.":80".extraConfig)
+      && (settingsOf system).httpAddress == "127.0.0.1";
     fpmSendsMailToMailpit = lib.hasInfix "mailpit sendmail -S 127.0.0.1:1025"
       base_.config.services.phpfpm.pools.wordpress.phpOptions;
     opcacheRevalidates = lib.hasInfix "opcache.revalidate_freq = 0"

@@ -65,6 +65,18 @@ in {
       '';
     };
 
+    listenAddress = mkOption {
+      type = types.nullOr types.str;
+      default = "127.0.0.1";
+      example = null;
+      description = ''
+        Guest address Caddy serves the site on. nixant's port forward connects
+        to the guest's 127.0.0.1, so the default keeps the site off the Incus
+        bridge, where other instances could reach it. `null` listens on every
+        interface, for example to browse a VM guest by its address.
+      '';
+    };
+
     phpPackage = mkOption {
       type = types.package;
       default = pkgs.php;
@@ -225,6 +237,8 @@ in {
           workspace = config.nixant.mounts.workspace.target;
           muPlugin = "${muPlugin}";
           mailpit = { inherit (cfg.mailpit) uiPort smtpPort; };
+          # `wp-site check` requests the site here.
+          httpAddress = if cfg.listenAddress == null then "127.0.0.1" else cfg.listenAddress;
           core = "${cfg.package}";
           coreId = builtins.baseNameOf "${cfg.package}";
           db = db // { user = user; };
@@ -292,7 +306,9 @@ in {
           inherit user group;
           enableReload = false;
           globalConfig = "admin off";
-          virtualHosts.":80".extraConfig = ''
+          virtualHosts.":80".extraConfig = lib.optionalString (cfg.listenAddress != null) ''
+            bind ${cfg.listenAddress}
+          '' + ''
             root * ${root}
             # Setup state (.core-version, .cache) lives in the web root.
             @dotfiles path /.*

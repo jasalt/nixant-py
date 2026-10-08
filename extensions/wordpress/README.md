@@ -70,6 +70,7 @@ When `up` finishes (`... ready`):
 | `wordpress.package` | upstream WordPress tarball from nixpkgs | Core source, copied into `/var/lib/wordpress` by the setup unit. nixpkgs' own `wordpress` package omits the bundled themes and plugins, so a fresh site would have no theme. |
 | `wordpress.phpPackage` | `pkgs.php` (8.4 at the pinned nixpkgs) | PHP for PHP-FPM and WP-CLI. Override it for another version; it needs mysqli, gd, zip, exif and intl, which nixpkgs' PHP has. |
 | `wordpress.title` | `"WordPress"` | Site title, used at the first install only. |
+| `wordpress.listenAddress` | `"127.0.0.1"` | Guest address the site is served on. nixant's port forward connects to the guest's loopback, so the default keeps the site off the Incus bridge, where other instances could reach it. `null` listens on every interface, for example to browse a VM guest by its address. |
 | `wordpress.url` | `http://localhost:<host port forwarded to guest 80>` | The public URL. Must be set explicitly when no `nixant.ports` entry has `guest = 80`. `http://` only. |
 | `wordpress.admin.{user,password,email}` | `admin` / `password` / `admin@example.test` | Administrator for the first install. Development-only credentials; they are stored in the Nix store. |
 | `wordpress.plugins.<slug>.path` | none | Directory (relative to the project root) linked as `wp-content/plugins/<slug>`. |
@@ -136,7 +137,7 @@ If `wordpress-setup.service` fails, `nixant up` still finishes but warns `activa
 
 ## Agent isolation
 
-`nixant.isolation = "agent"` works with nixant-wp. nixant allows forwarded ports on `127.0.0.1` in that mode, so the site keeps its derived URL and the agent-isolated guest is still reachable from the host browser. The guest user has no sudo; the setup service and the web stack run as that user, so they do not need it. See nixant's README for what the profile does and does not restrict.
+`nixant.isolation = "agent"` works with nixant-wp. nixant allows forwarded ports on `127.0.0.1` in that mode, so the site keeps its derived URL and the agent-isolated guest is still reachable from the host browser. The site itself listens only on the guest's loopback (`wordpress.listenAddress`), so other instances on the Incus bridge, agent-isolated or not, cannot reach its wp-admin. The guest user has no sudo; the setup service and the web stack run as that user, so they do not need it. See nixant's README for what the profile does and does not restrict.
 
 ## Tests
 

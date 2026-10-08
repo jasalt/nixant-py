@@ -53,6 +53,9 @@ in pkgs.testers.runNixOSTest {
     machine.succeed("curl -fs -H 'Host: localhost:8081' http://127.0.0.1/ | grep vm-plugin")
     machine.succeed("su - dev -c 'cd / && wp plugin is-active it-plugin'")
 
+    # Caddy listens on loopback only, where nixant's port forward connects.
+    machine.succeed("test \"$(ss -Hltn 'sport = :80' | awk '{print $4}' | sort -u)\" = 127.0.0.1:80")
+
     # Rerunning setup converges without changes.
     machine.succeed("systemctl restart wordpress-setup.service")
     machine.succeed("su - dev -c 'wp-site check'")

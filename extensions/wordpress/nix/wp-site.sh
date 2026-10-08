@@ -33,6 +33,7 @@ load_settings() {
   db_user=$(setting .db.user)
   db_socket=$(setting .db.socket)
   mailpit_url=$(setting '.mailpitUrl // "not forwarded to the host"')
+  http_address=$(setting .httpAddress)
   # The bundled wrapper has no useful HOME in a system service, and its cache
   # must not land in the web root unprotected: Caddy hides dotfiles.
   export WP_CLI_CACHE_DIR="$root/.cache/wp-cli"
@@ -232,9 +233,9 @@ check_plugins() {
 # so ask the local web server for it with the configured Host header.
 check_http() {
   local host=${url#http://} code admin location
-  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host" http://127.0.0.1/) || true
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host" "http://$http_address/") || true
   [ "$code" = 200 ] || fail front-page "GET / returned '$code', expected 200"
-  admin=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $host" http://127.0.0.1/wp-admin/ || true)
+  admin=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $host" "http://$http_address/wp-admin/" || true)
   code=${admin%% *}
   location=${admin#* }
   [ "$code" = 302 ] && [[ "$location" == */wp-login.php* ]] \
