@@ -19,9 +19,10 @@ def cleanup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Mock, Mock
     provider = Mock()
     monkeypatch.setattr("nixant.cli.lookup", lookup)
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda _: provider)
-    monkeypatch.setattr(
-        "nixant.cli.evaluate", Mock(side_effect=AssertionError("must not evaluate"))
-    )
+    for evaluation in ("nixant.deploy.evaluate", "nixant.cli.evaluate_spec"):
+        monkeypatch.setattr(
+            evaluation, Mock(side_effect=AssertionError("must not evaluate"))
+        )
     return lookup, provider, tmp_path
 
 

@@ -4,7 +4,7 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import replace
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -12,7 +12,7 @@ import click
 import typer
 from typer.core import TyperGroup
 
-from nixant import snapshots
+from nixant import deploy, snapshots
 from nixant.adopt import adopt as adopt_instance
 from nixant.adopt import choose
 from nixant.errors import CommandError, NixantError, UsageError
@@ -23,7 +23,7 @@ from nixant.init import (
     print_templates,
     self_path,
 )
-from nixant.models import SCHEMA_VERSION, MachineSpec, MachineState
+from nixant.models import SCHEMA_VERSION
 from nixant.naming import (
     get_override,
     propose,
@@ -31,18 +31,14 @@ from nixant.naming import (
     unset_override,
     validate_instance_name,
 )
-from nixant.nix.activate import activate, can_skip
-from nixant.nix.build import build, gcroot_path
-from nixant.nix.eval import evaluate, evaluate_spec
+from nixant.nix.build import gcroot_path
+from nixant.nix.eval import evaluate_spec
 from nixant.ownership import (
     PREFIX,
     check_owner,
     lookup,
-    metadata,
     require_instance,
-    resolve,
 )
-from nixant.planner import Change, Effect, plan, validate
 from nixant.project import (
     discover_project,
     project_id,
@@ -108,130 +104,17 @@ def parse_duration(value: str | None) -> float | None:
     return seconds
 
 
-def _apply(provider: IncusProvider, name: str, changes: list[Change]) -> None:
-    for change in changes:
-        typer.echo(f"{change.setting}: {change.summary}", err=True)
-        provider.apply(name, change)
-
-
-def _refuse(changes: list[Change], reason: str) -> None:
-    blocked = [c for c in changes if c.effect in (Effect.RECREATE, Effect.UNSUPPORTED)]
-    if blocked:
-        raise NixantError(
-            f"{reason}:\n" + "\n".join(f"  {c.setting}: {c.summary}" for c in blocked)
-        )
-
-
-def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) -> None:
-    """Store every change on the instance, or refuse the whole set up front."""
-    changes = plan(spec, state)
-    _refuse(changes, "cannot apply configuration to existing instance")
-    if any(c.op == "root-size" for c in changes):
-        provider.check_quota(state.expanded_devices.get("root", {}).get("pool"))
-    # Restart-effect settings are stored now (Incus accepts them on a running
-    # instance) but only show up in the guest after its next boot.
-    _apply(provider, spec.instance_name, changes)
-    if state.status != "Stopped":
-        for change in changes:
-            if change.effect is Effect.RESTART:
-                typer.echo(
-                    f"{change.setting}: takes effect after the next restart; "
-                    f"run nixant restart",
-                    err=True,
-                )
-
-
 def _deploy(
-    ctx: typer.Context, target: str, timeout: str | None, *, rebuild: bool
+    ctx: typer.Context,
+    target: str,
+    timeout: str | None,
+    step: Callable[[IncusProvider, Runner, Path, str, float], None],
 ) -> None:
     duration = parse_duration(timeout) or DEFAULT_ACTIVATION_TIMEOUT
     runner = ctx.obj["runner"]
-    provider = IncusProvider(runner)
     root = discover_project()
     with target_lock(root, target):
-        evaluated = evaluate(root, target, runner)
-        spec = evaluated.spec
-        override = get_override(root, target, runner)
-        if override:
-            spec = replace(spec, instance_name=override)
-        if spec.user.uid != os.getuid():
-            raise NixantError(
-                f"set nixant.user.uid = {os.getuid()}; "
-                f"configured UID is {spec.user.uid}"
-            )
-        sources = resolve_mount_sources(
-            root, {mount.name: mount.source for mount in spec.mounts}
-        )
-        spec = replace(
-            spec,
-            mounts=tuple(
-                replace(mount, source=str(sources[mount.name])) for mount in spec.mounts
-            ),
-        )
-        if not rebuild:
-            # Fail before building or creating anything the instance cannot take.
-            _refuse(validate(spec), "cannot apply configuration")
-        system = build(root, target, evaluated.drv_path, runner)
-        state = resolve(
-            provider,
-            root,
-            target,
-            spec.instance_name,
-            kind=spec.kind,
-            name_source="git override" if override else "config",
-        )
-        if rebuild:
-            if state is None or state.status != "Running":
-                raise NixantError(
-                    f"instance {spec.instance_name} is not running; run nixant up"
-                )
-            outer = plan(spec, state)
-            if outer:
-                fields = ", ".join(sorted({change.setting for change in outer}))
-                typer.echo(
-                    f"warning: outer settings differ ({fields}); "
-                    "run nixant up to apply",
-                    err=True,
-                )
-        else:
-            if state is None:
-                if spec.disk_bytes is not None:
-                    provider.check_quota(None)
-                provider.create(spec, metadata(root, target))
-                state = provider.inspect(spec.instance_name)
-                if state is None:
-                    raise NixantError(f"instance {spec.instance_name} disappeared")
-                _reconcile(provider, spec, state)
-                provider.start(spec.instance_name)
-            elif state.status not in ("Running", "Stopped", "Frozen"):
-                raise NixantError(
-                    f"instance {spec.instance_name} "
-                    f"has unsupported state {state.status}"
-                )
-            else:
-                _reconcile(provider, spec, state)
-                if state.status != "Running":
-                    provider.start(spec.instance_name)
-        wait_ready(provider, spec.instance_name, spec.kind, verbose=runner.verbose)
-        if not rebuild:
-            for mount in spec.mounts:
-                provider.ensure_mount(spec.instance_name, mount, verify=True)
-        if rebuild or state is None or not can_skip(provider, state, system):
-            activate(provider, runner, spec, system, timeout=duration)
-        else:
-            # Settings that do not change the system closure still drive shell/exec.
-            runtime = {
-                PREFIX + "user": spec.user.name,
-                PREFIX + "workdir": spec.workdir,
-            }
-            stale = {k: v for k, v in runtime.items() if state.config.get(k) != v}
-            if stale:
-                provider.set_metadata(spec.instance_name, stale)
-        final = provider.inspect(spec.instance_name)
-        addresses = " ".join(final.ipv4) if final else ""
-        typer.echo(
-            f"{spec.instance_name} ready ({target}) {addresses}; nixant shell {target}"
-        )
+        step(IncusProvider(runner), runner, root, target, duration)
 
 
 @app.command()
@@ -257,7 +140,7 @@ def up(
     ),
 ) -> None:
     """Build, start and activate the target environment."""
-    _deploy(ctx, target, timeout, rebuild=False)
+    _deploy(ctx, target, timeout, deploy.up)
 
 
 @app.command()
@@ -267,7 +150,7 @@ def rebuild(
     timeout: str | None = typer.Option(None, help="Activation deadline, e.g. 5m."),
 ) -> None:
     """Build and always activate an existing running environment."""
-    _deploy(ctx, target, timeout, rebuild=True)
+    _deploy(ctx, target, timeout, deploy.rebuild)
 
 
 def _enter(ctx: typer.Context, target: str, command: list[str] | None) -> None:

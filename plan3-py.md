@@ -627,6 +627,7 @@ examples/basic/flake.nix
 src/nixant/
   __main__.py
   cli.py                   # Typer app, error → exit code mapping
+  deploy.py                # up and rebuild as steps: evaluate, build, converge, activate
   project.py               # discovery, project ID, instance-name override lookup, mount path resolution, untracked pre-flight, locking
   init.py                  # template listing, nix flake init, instance-name proposal, lock pinning, snippets
   models.py                # frozen dataclasses: MachineSpec, MountSpec, PortSpec, UserSpec, MachineState

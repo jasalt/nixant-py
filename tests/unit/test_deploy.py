@@ -20,7 +20,7 @@ from nixant.run import Runner
 @pytest.fixture
 def deploy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Mock]:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr("nixant.cli.os.getuid", lambda: 1000)
+    monkeypatch.setattr("nixant.deploy.os.getuid", lambda: 1000)
     spec = MachineSpec.from_runtime(
         json.loads((Path(__file__).parents[2] / "nix/tests/runtime.json").read_text())
     )
@@ -36,7 +36,8 @@ def deploy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Mock]:
         "can_skip": False,
     }.items():
         mocks[name] = Mock(return_value=value)
-        monkeypatch.setattr(f"nixant.cli.{name}", mocks[name])
+        module = "cli" if name in ("check_host_tools", "discover_project") else "deploy"
+        monkeypatch.setattr(f"nixant.{module}.{name}", mocks[name])
     mocks["provider"] = Mock()
     mocks["provider"].inspect.return_value = MachineState(
         "test-dev", "Stopped", "container", {}, {}
@@ -67,15 +68,15 @@ def test_up_order(deploy: dict[str, Mock]) -> None:
 def test_uid_and_mount_before_incus(
     deploy: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("nixant.cli.os.getuid", lambda: 999)
+    monkeypatch.setattr("nixant.deploy.os.getuid", lambda: 999)
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 1
     assert "nixant.user.uid = 999" in result.output
     deploy["resolve"].assert_not_called()
     deploy["build"].assert_not_called()
-    monkeypatch.setattr("nixant.cli.os.getuid", lambda: 1000)
+    monkeypatch.setattr("nixant.deploy.os.getuid", lambda: 1000)
     monkeypatch.setattr(
-        "nixant.cli.resolve_mount_sources",
+        "nixant.deploy.resolve_mount_sources",
         Mock(side_effect=NixantError("missing mount")),
     )
     assert CliRunner().invoke(app, ["up"]).exit_code == 1
@@ -239,7 +240,7 @@ def install_fake(
     # Resolve reads the fake's current state, so tests may adjust it first.
     deploy["resolve"].side_effect = lambda *args, **kwargs: provider.inspect("test-dev")
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda runner: provider)
-    monkeypatch.setattr("nixant.cli.can_skip", can_skip)
+    monkeypatch.setattr("nixant.deploy.can_skip", can_skip)
 
 
 @pytest.fixture
@@ -401,7 +402,7 @@ def test_up_reuses_an_obsolete_mount_target(
 def test_up_uses_git_override_name(
     deploy: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("nixant.cli.get_override", Mock(return_value="shop-mine"))
+    monkeypatch.setattr("nixant.deploy.get_override", Mock(return_value="shop-mine"))
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 0, result.output
     assert deploy["resolve"].call_args.args[3] == "shop-mine"

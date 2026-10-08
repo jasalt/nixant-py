@@ -20,7 +20,7 @@ def display(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Mock, Mock
     provider.find.return_value = []
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda _: provider)
     evaluate = Mock()
-    monkeypatch.setattr("nixant.cli.evaluate", evaluate)
+    monkeypatch.setattr("nixant.deploy.evaluate", evaluate)
     monkeypatch.setattr("nixant.cli.evaluate_spec", evaluate)
     return provider, evaluate, tmp_path
 

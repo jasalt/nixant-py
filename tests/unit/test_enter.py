@@ -33,9 +33,10 @@ def enter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Mock, Mock]:
     )
     execute = Mock()
     monkeypatch.setattr("nixant.cli.os.execvp", execute)
-    monkeypatch.setattr(
-        "nixant.cli.evaluate", Mock(side_effect=AssertionError("must not evaluate"))
-    )
+    for evaluation in ("nixant.deploy.evaluate", "nixant.cli.evaluate_spec"):
+        monkeypatch.setattr(
+            evaluation, Mock(side_effect=AssertionError("must not evaluate"))
+        )
     return lookup, execute
 
 
