@@ -1,0 +1,14 @@
+# devenv state (MariaDB data, Mailpit, Caddy), built and used inside the guest
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# The mutable WordPress root, created by `devenv tasks run wordpress:setup`.
+/wordpress/
+# To track your own theme or plugin, replace the line above with, for example:
+#   /wordpress/*
+#   !/wordpress/wp-content/
+#   /wordpress/wp-content/*
+#   !/wordpress/wp-content/themes/
+#   /wordpress/wp-content/themes/*
+#   !/wordpress/wp-content/themes/my-theme/
