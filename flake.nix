@@ -60,7 +60,7 @@
           echo "$results" > "$out"
         '';
         templates = pkgs.runCommand "nixant-template-tests" {
-          results = builtins.toJSON (import ./nix/tests/templates.nix { inherit nixpkgs system; });
+          results = builtins.toJSON (import ./nix/tests/templates.nix { inherit nixpkgs system; nixant = self; });
         } ''
           echo "$results" > "$out"
         '';

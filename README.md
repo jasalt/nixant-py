@@ -149,4 +149,6 @@ $ ruff check . && ruff format --check . && mypy && pytest
 $ nix flake check
 ```
 
+`nix flake check` evaluates every template and `examples/basic` through their own `flake.nix` down to the system derivation. The example is evaluated with the inputs from its committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh it with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` in `examples/basic`.
+
 Integration tests need a disposable Incus environment and run with `NIXANT_INTEGRATION=1`.
