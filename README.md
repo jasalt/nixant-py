@@ -62,6 +62,25 @@ Rules enforced at evaluation time:
 
 Everything else is ordinary NixOS and home-manager configuration, attached to `users.users.<name>` and `home-manager.users.<name>`.
 
+## Extension modules
+
+Other NixOS modules can build on nixant, for example a module that sets up a web stack and reads the project's user and forwarded ports. The flake exports three modules:
+
+- `nixosModules.container` and `nixosModules.vm` are what a project imports; each pulls in the options and creates the guest user.
+- `nixosModules.options` declares only the `nixant.*` options and their rules, without the guest user, boot or Incus settings. Use it to evaluate or test an extension module without an Incus guest; the test then has to define the `users.users` entry for `nixant.user.name` itself.
+
+Extension modules may read these options. The container and VM modules set `nixant.enable = true`; with the options module alone, set it yourself, otherwise the workspace mount default does not exist:
+
+| Option | Meaning |
+|---|---|
+| `nixant.user.name`, `nixant.user.uid` | The guest user, whose UID equals the host UID. Services that must read and write the workspace run as this user. |
+| `nixant.mounts.<name>.{source,target,readOnly,enable}` | Host mounts; `nixant.mounts.workspace.target` (default `/workspace`) is the project root in the guest. |
+| `nixant.ports` | List of `{ host; guest; address; }` forwards; `address` defaults to `127.0.0.1`. |
+| `nixant.isolation` | `"none"` or `"agent"` (see Agent isolation). |
+| `nixant.instanceName`, `nixant.workdir`, `nixant.cpus`, `nixant.memory`, `nixant.disk`, `nixant.ephemeral` | Instance settings. |
+
+`nixant.runtime` is internal (the JSON the CLI consumes) and read-only; extension modules should not read or set it. To check that nixant is present, test `options ? nixant` in the module arguments, and read `config.nixant` only behind that.
+
 ## Workflow
 
 ```console
