@@ -38,6 +38,15 @@ let
   };
   themeType = types.submodule { options = componentOptions "Theme"; };
 
+  # nixpkgs' wordpress package drops the bundled themes and plugins, which
+  # leaves a fresh site without a theme. The upstream tarball has them.
+  upstreamCore = pkgs.runCommand "wordpress-core-${pkgs.wordpress.version}" {
+    inherit (pkgs.wordpress) version;
+  } ''
+    mkdir "$out"
+    tar -xzf ${pkgs.wordpress.src} --strip-components=1 -C "$out"
+  '';
+
   bad = names: lib.concatStringsSep ", " (map (name: "'${name}'") names);
   unsafe = components:
     builtins.attrNames (lib.filterAttrs (_: component: !safePath component.path) components);
@@ -47,11 +56,12 @@ in {
 
     package = mkOption {
       type = types.package;
-      default = pkgs.wordpress;
-      defaultText = lib.literalExpression "pkgs.wordpress";
+      default = upstreamCore;
+      defaultText = lib.literalExpression "the unpacked pkgs.wordpress.src tarball";
       description = ''
-        WordPress core source. nixpkgs' package omits the bundled themes and
-        plugins.
+        WordPress core source, copied into /var/lib/wordpress by the setup
+        unit. The default is the upstream tarball of nixpkgs' WordPress, whose
+        own package omits the bundled themes and plugins.
       '';
     };
 
@@ -167,6 +177,20 @@ in {
         group = config.users.users.${user}.group;
         root = "/var/lib/wordpress";
         pool = config.services.phpfpm.pools.wordpress;
+        db = { name = "wordpress"; socket = "/run/mysqld/mysqld.sock"; };
+        wpCli = pkgs.wp-cli.override { php = cfg.phpPackage; };
+        wpSite = pkgs.callPackage ./wp-site.nix { wp-cli = wpCli; };
+        uiPort = builtins.filter (port: port.guest == cfg.mailpit.uiPort) config.nixant.ports;
+        # Everything wp-site setup needs; a change reruns the setup unit.
+        settingsFile = pkgs.writeText "wordpress-site.json" (builtins.toJSON {
+          inherit root;
+          inherit (cfg) title url admin;
+          core = "${cfg.package}";
+          coreId = builtins.baseNameOf "${cfg.package}";
+          db = db // { user = user; };
+          mailpitUrl = if uiPort == [] then null
+            else "http://localhost:${toString (builtins.head uiPort).host}";
+        });
       in {
         # PHP-FPM, Caddy and the setup unit all run as the nixant user, so the
         # idmapped workspace mount is readable and writable without extra groups.
@@ -177,10 +201,10 @@ in {
         services.mysql = {
           enable = true;
           package = pkgs.mariadb;
-          ensureDatabases = [ "wordpress" ];
+          ensureDatabases = [ db.name ];
           ensureUsers = [{
             name = user;
-            ensurePermissions."wordpress.*" = "ALL PRIVILEGES";
+            ensurePermissions."${db.name}.*" = "ALL PRIVILEGES";
           }];
         };
 
@@ -213,10 +237,32 @@ in {
           globalConfig = "admin off";
           virtualHosts.":80".extraConfig = ''
             root * ${root}
+            # Setup state (.core-version, .cache) lives in the web root.
+            @dotfiles path /.*
+            respond @dotfiles 404
             encode gzip
             php_fastcgi unix/${pool.socket}
             file_server
           '';
+        };
+
+        # Converges core, wp-config and the install; a failure shows up as a
+        # degraded activation (journalctl -u wordpress-setup).
+        systemd.services.wordpress-setup = {
+          description = "Converge the WordPress site";
+          wantedBy = [ "multi-user.target" ];
+          after = [ "mysql.service" ];
+          requires = [ "mysql.service" ];
+          restartTriggers = [ settingsFile ];
+          environment.WP_SITE_SETTINGS = settingsFile;
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            User = user;
+            Group = group;
+            ExecStart = "${wpSite}/bin/wp-site setup";
+            TimeoutStartSec = 600;
+          };
         };
 
         services.mailpit.instances.wordpress = {

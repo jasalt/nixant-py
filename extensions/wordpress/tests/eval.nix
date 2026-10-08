@@ -34,6 +34,9 @@ let
     in messages != [] && lib.all (message: lib.hasInfix needle message) messages;
 
   base_ = evaluate {};
+  settingsOf = system:
+    builtins.fromJSON (builtins.unsafeDiscardStringContext
+      (builtins.readFile system.config.systemd.services.wordpress-setup.environment.WP_SITE_SETTINGS));
   base = base_.config.wordpress;
   tests = {
     validConfigBuilds = valid {};
@@ -58,6 +61,27 @@ let
     mailpitPortsConfigurable = let m = (evaluate { extra.wordpress.mailpit = { uiPort = 9025; smtpPort = 9026; }; }).config.services.mailpit.instances.wordpress; in
       m.listen == "127.0.0.1:9025" && m.smtp == "127.0.0.1:9026";
     stateDirectoryRule = lib.elem "d /var/lib/wordpress 0750 dev dev - -" base_.config.systemd.tmpfiles.rules;
+    setupUnit = let u = base_.config.systemd.services.wordpress-setup; in
+      u.serviceConfig.Type == "oneshot" && u.serviceConfig.RemainAfterExit
+      && u.serviceConfig.User == "dev"
+      && lib.elem "mysql.service" u.after && lib.elem "mysql.service" u.requires
+      && lib.elem "multi-user.target" u.wantedBy
+      && lib.hasSuffix "/bin/wp-site setup" u.serviceConfig.ExecStart;
+    setupSettings = let
+      u = base_.config.systemd.services.wordpress-setup;
+      settings = settingsOf base_;
+    in u.restartTriggers == [ u.environment.WP_SITE_SETTINGS ]
+      && settings.url == "http://localhost:8081" && settings.db.user == "dev"
+      && settings.mailpitUrl == null
+      && lib.hasPrefix "/nix/store/" settings.core && lib.hasInfix settings.coreId settings.core;
+    mailpitUrlFromPorts = (settingsOf (evaluate {
+      extra.nixant.ports = lib.mkForce [ { host = 8081; guest = 80; } { host = 9025; guest = 8025; } ];
+    })).mailpitUrl == "http://localhost:9025";
+    titleChangeRerunsSetup = let
+      path = args: (evaluate args).config.systemd.services.wordpress-setup.environment.WP_SITE_SETTINGS;
+    in path {} != path { extra.wordpress.title = "Other"; };
+    coreIncludesThemes = builtins.pathExists "${base.package}/wp-content/themes/twentytwentyfive";
+    dotfilesHidden = lib.hasInfix "respond @dotfiles 404" base_.config.services.caddy.virtualHosts.":80".extraConfig;
     nothingWhenDisabled = !(evaluate { extra.wordpress.enable = lib.mkForce false; }).config.services.caddy.enable;
     defaultsAreDevelopmentOnly = base.admin.user == "admin" && base.wpConfig.WP_DEBUG_DISPLAY == false;
 
