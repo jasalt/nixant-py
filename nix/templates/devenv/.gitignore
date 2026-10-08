@@ -1,0 +1,4 @@
+# devenv state, built and used inside the guest
+.devenv*
+devenv.local.nix
+devenv.local.yaml

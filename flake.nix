@@ -51,6 +51,10 @@
           path = ./nix/templates/python;
           description = "Default container plus Python 3 and uv";
         };
+        devenv = {
+          path = ./nix/templates/devenv;
+          description = "Default container plus devenv, with a starter devenv.nix";
+        };
       };
 
       checks.${system} = {

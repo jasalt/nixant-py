@@ -8,7 +8,7 @@ let
   lockedInput = lock: name: lock.nodes.${lock.nodes.root.inputs.${name}};
   rootLock = lib.importJSON ../../flake.lock;
   # A generated project as `nixant init` locks it: nixpkgs followed into nixant.
-  names = [ "default" "node" "python" ];
+  names = [ "default" "node" "python" "devenv" ];
   templates = lib.genAttrs names (name: let src = ../templates + "/${name}"; in {
     inputs = (import (src + "/flake.nix")).inputs;
     config = (callFlake src { inherit nixpkgs nixant; }).nixosConfigurations.dev.config;
@@ -37,6 +37,9 @@ let
     snippetMarkers = lib.all (t: contains ''nixant.instanceName = "nixant-template-dev";'' t.snippet) (lib.attrValues templates);
     nodePackages = hasPackage "node" "nodejs" && !(hasPackage "default" "nodejs");
     pythonPackages = hasPackage "python" "uv" && hasPackage "python" "python3";
+    devenvPackages = hasPackage "devenv" "devenv" && !(hasPackage "default" "devenv");
+    devenvFiles = lib.all (file: builtins.pathExists (../templates/devenv + "/${file}"))
+      [ "devenv.nix" "devenv.yaml" ".gitignore" ];
     exampleEvaluates = example.nixant.runtime.instanceName == "shop-dev";
     exampleGolden = example.nixant.runtime == lib.importJSON (exampleSrc + "/runtime.json");
     exampleBuilds = builds example;
