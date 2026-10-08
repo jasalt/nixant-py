@@ -97,6 +97,35 @@ def test_worktrees_get_independent_overrides(repo: Path, tmp_path: Path) -> None
     assert get_override(repo, "dev", runner) == "shop-main"
 
 
+def test_surviving_worktree_keeps_using_worktree_scope(
+    repo: Path, tmp_path: Path
+) -> None:
+    runner = Runner()
+    linked = tmp_path / "linked"
+    git(repo, "worktree", "add", "-q", str(linked), "-b", "feature")
+    assert set_override(repo, "dev", "shop-old", runner) == "worktree"
+    git(repo, "worktree", "remove", str(linked))
+    assert git(repo, "worktree", "list", "--porcelain").count("worktree ") == 1
+    assert set_override(repo, "dev", "shop-new", runner) == "worktree"
+    assert get_override(repo, "dev", runner) == "shop-new"
+    assert unset_override(repo, "dev", runner) == "worktree"
+    assert get_override(repo, "dev", runner) is None
+    assert unset_override(repo, "dev", runner) is None
+
+
+def test_new_worktree_after_override_stays_independent(
+    repo: Path, tmp_path: Path
+) -> None:
+    runner = Runner()
+    git(repo, "config", "extensions.worktreeConfig", "true")
+    assert set_override(repo, "dev", "shop-main", runner) == "worktree"
+    linked = tmp_path / "linked"
+    git(repo, "worktree", "add", "-q", str(linked), "-b", "feature")
+    assert set_override(linked, "dev", "shop-linked", runner) == "worktree"
+    assert get_override(repo, "dev", runner) == "shop-main"
+    assert get_override(linked, "dev", runner) == "shop-linked"
+
+
 def test_invalid_override_in_config_is_reported(repo: Path) -> None:
     git(repo, "config", "nixant.dev.instanceName", "Bad Name")
     with pytest.raises(NixantError, match="--unset"):

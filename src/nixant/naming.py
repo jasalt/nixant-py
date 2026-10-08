@@ -60,7 +60,20 @@ def get_override(root: Path, target: str, runner: Runner) -> str | None:
         ) from exc
 
 
-def _is_multi_worktree(root: Path, runner: Runner) -> bool:
+def _uses_worktree_scope(root: Path, runner: Runner) -> bool:
+    """Linked worktrees need their own scope; once enabled, it outranks local.
+
+    Removing the linked worktrees leaves the extension and this worktree's
+    values in place, so a local write would then be shadowed by them.
+    """
+    enabled = runner.run(
+        ["git", "config", "--type=bool", "--get", "extensions.worktreeConfig"],
+        cwd=root,
+        capture=True,
+        check=False,
+    )
+    if enabled.returncode == 0 and enabled.stdout.decode().strip() == "true":
+        return True
     listing = runner.run(
         ["git", "worktree", "list", "--porcelain"], cwd=root, capture=True
     )
@@ -74,7 +87,7 @@ def set_override(root: Path, target: str, name: str, runner: Runner) -> str:
             "outside a git work tree there is nowhere to store the override"
         )
     key = config_key(target)
-    if _is_multi_worktree(root, runner):
+    if _uses_worktree_scope(root, runner):
         runner.run(["git", "config", "extensions.worktreeConfig", "true"], cwd=root)
         runner.run(["git", "config", "--worktree", key, name], cwd=root)
         return "worktree"
