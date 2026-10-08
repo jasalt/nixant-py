@@ -10,6 +10,7 @@ from nixant.cli import app
 from nixant.errors import CommandError, NixantError
 from nixant.models import SCHEMA_VERSION, MachineState, MountSpec
 from nixant.ownership import PREFIX
+from nixant.planner import SetDevice
 from nixant.project import project_id
 
 
@@ -176,10 +177,10 @@ def test_adopt_rewrites_metadata_mounts_and_gcroot(moved: dict) -> None:
     )
     provider = Mock()
     adopt(provider, moved["runner"], new, "dev", state)
-    changes = {c.args[1].key: c.args[1] for c in provider.apply.call_args_list}
-    assert set(changes) == {"nixant-mount-workspace", "nixant-mount-sub"}
-    assert changes["nixant-mount-workspace"].values == {"source": str(new)}
-    assert changes["nixant-mount-sub"].values == {"source": f"{new}/pkg"}
+    assert [c.args[1].action for c in provider.apply.call_args_list] == [
+        SetDevice("nixant-mount-sub", {"source": f"{new}/pkg"}),
+        SetDevice("nixant-mount-workspace", {"source": str(new)}),
+    ]
     provider.set_metadata.assert_called_once_with(
         "lost", {PREFIX + "project": project_id(new), PREFIX + "root": str(new)}
     )

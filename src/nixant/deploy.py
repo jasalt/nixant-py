@@ -13,7 +13,14 @@ from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build
 from nixant.nix.eval import evaluate
 from nixant.ownership import PREFIX, metadata, resolve
-from nixant.planner import Change, Effect, check_mount, plan, validate
+from nixant.planner import (
+    Change,
+    Effect,
+    SetRootSize,
+    check_mount,
+    plan,
+    validate,
+)
 from nixant.project import resolve_mount_sources
 from nixant.providers.incus import IncusProvider
 from nixant.readiness import wait_ready
@@ -146,7 +153,7 @@ def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) 
     """Store every change on the instance, or refuse the whole set up front."""
     changes = plan(spec, state)
     _refuse(changes, "cannot apply configuration to existing instance")
-    if any(c.op == "root-size" for c in changes):
+    if any(isinstance(c.action, SetRootSize) for c in changes):
         provider.check_quota(state.expanded_devices.get("root", {}).get("pool"))
     # Restart-effect settings are stored now (Incus accepts them on a running
     # instance) but only show up in the guest after its next boot.

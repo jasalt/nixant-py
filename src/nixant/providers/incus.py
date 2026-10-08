@@ -5,12 +5,20 @@ import re
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, assert_never
 from urllib.parse import quote
 
 from nixant.errors import CommandError, NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec, Snapshot
-from nixant.planner import PORT_PREFIX, Change, remount
+from nixant.planner import (
+    AddDevice,
+    Change,
+    RemoveDevice,
+    SetConfig,
+    SetDevice,
+    SetRootSize,
+    remount,
+)
 from nixant.run import Runner
 
 # Polls of /proc/mounts, 0.5s apart, before a missing mount is re-added.
@@ -45,6 +53,10 @@ def _state(data: Any) -> MachineState:
         )
     except (KeyError, TypeError, AttributeError, ValueError) as exc:
         raise NixantError(f"invalid Incus instance response: {exc}") from exc
+
+
+def _pairs(values: Mapping[str, str]) -> list[str]:
+    return [f"{key}={value}" for key, value in values.items()]
 
 
 def _json(raw: bytes) -> Any:
@@ -161,44 +173,26 @@ class IncusProvider:
     def apply(self, name: str, change: Change) -> None:
         """Run one planned change; the planner has already decided it is live."""
         target = _local(name)
-        values = [f"{key}={value}" for key, value in change.values.items()]
-        if change.op == "config":
-            self.runner.run(
-                [
-                    "incus",
-                    "config",
-                    "set",
-                    target,
-                    f"{change.key}={change.values['value']}",
-                ]
-            )
-        elif change.op == "device-add":
-            kind = "proxy" if change.key.startswith(PORT_PREFIX) else "disk"
-            self.runner.run(
-                ["incus", "config", "device", "add", target, change.key, kind, *values]
-            )
-        elif change.op == "device-set":
-            self.runner.run(
-                ["incus", "config", "device", "set", target, change.key, *values]
-            )
-        elif change.op == "device-remove":
-            self.runner.run(["incus", "config", "device", "remove", target, change.key])
-        elif change.op == "root-size":
-            # Only the size key of the instance-local root device is ever touched.
-            verb = "set" if change.values.get("local") else "override"
-            self.runner.run(
-                [
-                    "incus",
-                    "config",
-                    "device",
-                    verb,
-                    target,
-                    "root",
-                    f"size={change.values['size']}",
-                ]
-            )
-        else:
-            raise NixantError(f"unknown change operation {change.op!r}")
+        device = ["incus", "config", "device"]
+        match change.action:
+            case SetConfig(key, value):
+                self.runner.run(["incus", "config", "set", target, f"{key}={value}"])
+            case AddDevice(device_name, kind, values):
+                self.runner.run(
+                    [*device, "add", target, device_name, kind, *_pairs(values)]
+                )
+            case SetDevice(device_name, values):
+                self.runner.run([*device, "set", target, device_name, *_pairs(values)])
+            case RemoveDevice(device_name):
+                self.runner.run([*device, "remove", target, device_name])
+            case SetRootSize(size, inherited):
+                # Only the size key of the instance-local root device is touched.
+                verb = "override" if inherited else "set"
+                self.runner.run([*device, verb, target, "root", f"size={size}"])
+            case None:
+                raise NixantError(f"{change.summary} cannot be applied")
+            case _:
+                assert_never(change.action)
 
     def check_quota(self, pool: str | None) -> None:
         """Fail before applying a disk size the root pool cannot enforce."""

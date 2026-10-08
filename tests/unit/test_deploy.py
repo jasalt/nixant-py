@@ -13,7 +13,7 @@ from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
 from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
 from nixant.ownership import PREFIX
-from nixant.planner import mount_device, plan
+from nixant.planner import SetConfig, SetRootSize, mount_device, plan
 from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
@@ -146,12 +146,15 @@ def test_limits_applied_to_new_instance_before_start(
     events.attach_mock(deploy["provider"], "provider")
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 0, result.output
-    keys = [
-        call.args[1].key
+    configs = [
+        call.args[1].action
         for call in deploy["provider"].apply.call_args_list
-        if call.args[1].op == "config"
+        if isinstance(call.args[1].action, SetConfig)
     ]
-    assert keys == ["limits.cpu", "limits.memory"]
+    assert configs == [
+        SetConfig("limits.cpu", "2"),
+        SetConfig("limits.memory", str(2**30)),
+    ]
     names = [call[0] for call in events.mock_calls]
     assert names.index("provider.create") < names.index("provider.apply")
     assert names.index("provider.apply") < names.index("provider.start")
@@ -518,8 +521,8 @@ def test_restart_effect_changes_are_stored_and_announced(
     deploy["can_skip"].return_value = True
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 0, result.output
-    ops = [call.args[1].op for call in deploy["provider"].apply.call_args_list]
-    assert "root-size" in ops
+    actions = [call.args[1].action for call in deploy["provider"].apply.call_args_list]
+    assert SetRootSize(2**34, inherited=True) in actions
     assert "takes effect after the next restart" in result.output
 
 

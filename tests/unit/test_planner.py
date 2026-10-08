@@ -7,7 +7,13 @@ import pytest
 from nixant.errors import NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
 from nixant.planner import (
+    AddDevice,
+    Change,
     Effect,
+    RemoveDevice,
+    SetConfig,
+    SetDevice,
+    SetRootSize,
     check_mount,
     mount_device,
     parse_size,
@@ -74,11 +80,10 @@ def test_null_settings_leave_existing_alone(spec: MachineSpec) -> None:
 def test_limits_are_live_config_changes(spec: MachineSpec) -> None:
     spec = replace(spec, cpus=2, memory_bytes=2**30)
     changes = plan(spec, state(devices={"nixant-mount-workspace": MOUNT}))
-    assert [(c.setting, c.effect, c.key) for c in changes] == [
-        ("cpus", Effect.LIVE, "limits.cpu"),
-        ("memory", Effect.LIVE, "limits.memory"),
+    assert [(c.setting, c.effect, c.action) for c in changes] == [
+        ("cpus", Effect.LIVE, SetConfig("limits.cpu", "2")),
+        ("memory", Effect.LIVE, SetConfig("limits.memory", str(2**30))),
     ]
-    assert changes[1].values["value"] == str(2**30)
 
 
 def test_memory_in_other_units_is_equivalent(spec: MachineSpec) -> None:
@@ -90,18 +95,19 @@ def test_memory_in_other_units_is_equivalent(spec: MachineSpec) -> None:
 @pytest.mark.parametrize(
     ("expanded", "local", "effect", "grows"),
     [
-        ({"root": {"type": "disk"}}, "", Effect.LIVE, True),
-        ({"root": {"type": "disk", "size": "4GiB"}}, "", Effect.LIVE, True),
+        ({"root": {"type": "disk"}}, False, Effect.LIVE, True),
+        ({"root": {"type": "disk", "size": "4GiB"}}, False, Effect.LIVE, True),
+        ({"root": {"type": "disk", "size": "4GiB"}}, True, Effect.LIVE, True),
         (
             {"root": {"type": "disk", "size": "32GiB"}},
-            "true",
+            True,
             Effect.UNSUPPORTED,
             False,
         ),
     ],
 )
 def test_disk_grow_and_shrink(
-    spec: MachineSpec, expanded: dict, local: str, effect: Effect, grows: bool
+    spec: MachineSpec, expanded: dict, local: bool, effect: Effect, grows: bool
 ) -> None:
     spec = replace(spec, disk_bytes=8 * 2**30)
     devices = {"nixant-mount-workspace": MOUNT}
@@ -110,8 +116,9 @@ def test_disk_grow_and_shrink(
     changes = plan(spec, state(devices=devices, expanded=expanded))
     assert [c.effect for c in changes] == [effect]
     if grows:
-        assert changes[0].op == "root-size"
-        assert changes[0].values["local"] == local
+        assert changes[0].action == SetRootSize(8 * 2**30, inherited=not local)
+    else:
+        assert changes[0].action is None
 
 
 def test_ports_add_update_remove(spec: MachineSpec) -> None:
@@ -135,15 +142,18 @@ def test_ports_add_update_remove(spec: MachineSpec) -> None:
         }
     )
     changes = plan(spec, current)
-    assert [(c.op, c.key) for c in changes] == [
-        ("device-remove", "nixant-port-7000"),
-        ("device-set", "nixant-port-9090"),
-        ("device-add", "nixant-port-8080"),
+    assert [c.action for c in changes] == [
+        RemoveDevice("nixant-port-7000"),
+        SetDevice(
+            "nixant-port-9090",
+            {"listen": "tcp:0.0.0.0:9090", "connect": "tcp:127.0.0.1:90"},
+        ),
+        AddDevice(
+            "nixant-port-8080",
+            "proxy",
+            {"listen": "tcp:127.0.0.1:8080", "connect": "tcp:127.0.0.1:80"},
+        ),
     ]
-    assert changes[1].values == {
-        "listen": "tcp:0.0.0.0:9090",
-        "connect": "tcp:127.0.0.1:90",
-    }
 
 
 def test_mounts_add_change_remove_are_live_for_containers(spec: MachineSpec) -> None:
@@ -162,21 +172,24 @@ def test_mounts_add_change_remove_are_live_for_containers(spec: MachineSpec) -> 
         }
     )
     changes = plan(spec, current)
-    assert {(c.op, c.key, c.effect) for c in changes} == {
-        ("device-add", "nixant-mount-cache", Effect.LIVE),
-        ("device-set", "nixant-mount-workspace", Effect.LIVE),
-        ("device-remove", "nixant-mount-old", Effect.LIVE),
-    }
-    set_change = next(c for c in changes if c.op == "device-set")
-    assert set_change.values == {"readonly": "true"}
+    assert {c.effect for c in changes} == {Effect.LIVE}
+    assert [c.action for c in changes] == [
+        RemoveDevice("nixant-mount-old"),
+        SetDevice("nixant-mount-workspace", {"readonly": "true"}),
+        AddDevice(
+            "nixant-mount-cache",
+            "disk",
+            mount_device(MountSpec("cache", "/cache", "/cache")),
+        ),
+    ]
 
 
 def test_renamed_mount_releases_its_target_before_the_add(spec: MachineSpec) -> None:
     spec = replace(spec, mounts=(MountSpec("code", "/src", "/workspace"),))
     current = state(devices={"nixant-mount-workspace": MOUNT})
-    assert [(c.op, c.key) for c in plan(spec, current)] == [
-        ("device-remove", "nixant-mount-workspace"),
-        ("device-add", "nixant-mount-code"),
+    assert [c.action for c in plan(spec, current)] == [
+        RemoveDevice("nixant-mount-workspace"),
+        AddDevice("nixant-mount-code", "disk", mount_device(spec.mounts[0])),
     ]
 
 
@@ -191,9 +204,9 @@ def test_retarget_onto_an_obsolete_target_removes_it_first(spec: MachineSpec) ->
             },
         }
     )
-    assert [(c.op, c.key) for c in plan(spec, current)] == [
-        ("device-remove", "nixant-mount-data"),
-        ("device-set", "nixant-mount-workspace"),
+    assert [c.action for c in plan(spec, current)] == [
+        RemoveDevice("nixant-mount-data"),
+        SetDevice("nixant-mount-workspace", {"path": "/data"}),
     ]
 
 
@@ -215,14 +228,13 @@ def test_swapped_targets_are_removed_and_re_added(spec: MachineSpec) -> None:
         }
     )
     changes = plan(spec, current)
-    assert [(c.op, c.key) for c in changes] == [
-        ("device-remove", "nixant-mount-a"),
-        ("device-remove", "nixant-mount-b"),
-        ("device-add", "nixant-mount-a"),
-        ("device-add", "nixant-mount-b"),
+    assert [c.action for c in changes] == [
+        RemoveDevice("nixant-mount-a"),
+        RemoveDevice("nixant-mount-b"),
+        AddDevice("nixant-mount-a", "disk", mount_device(spec.mounts[0])),
+        AddDevice("nixant-mount-b", "disk", mount_device(spec.mounts[1])),
     ]
-    assert changes[2].values["path"] == "/y"
-    assert changes[2].values["source"] == "/a"
+    assert spec.mounts[0].target == "/y"
 
 
 @pytest.mark.parametrize(
@@ -240,8 +252,8 @@ def test_changed_mount_key_is_updated_in_place(
     changes = plan(
         spec, state(devices={"nixant-mount-workspace": {**MOUNT, key: old_value}})
     )
-    assert [(c.op, c.key, dict(c.values)) for c in changes] == [
-        ("device-set", "nixant-mount-workspace", {key: MOUNT[key]})
+    assert [c.action for c in changes] == [
+        SetDevice("nixant-mount-workspace", {key: MOUNT[key]})
     ]
 
 
@@ -264,10 +276,28 @@ def test_check_mount_rejects_bad_names(name: str, tmp_path: Path) -> None:
 
 def test_remount_detaches_then_attaches_the_planned_device() -> None:
     mount = MountSpec("data", "/d", "/data", read_only=True)
-    assert [(c.op, c.key, dict(c.values)) for c in remount(mount)] == [
-        ("device-remove", "nixant-mount-data", {}),
-        ("device-add", "nixant-mount-data", mount_device(mount)),
+    assert [c.action for c in remount(mount)] == [
+        RemoveDevice("nixant-mount-data"),
+        AddDevice("nixant-mount-data", "disk", mount_device(mount)),
     ]
+
+
+@pytest.mark.parametrize("effect", list(Effect))
+def test_only_applicable_changes_carry_an_action(effect: Effect) -> None:
+    applicable = effect in (Effect.LIVE, Effect.RESTART)
+    action = RemoveDevice("nixant-mount-a")
+    with pytest.raises(ValueError, match="action"):
+        Change("x", effect, "x", None if applicable else action)
+    Change("x", effect, "x", action if applicable else None)
+
+
+def test_actions_are_immutable() -> None:
+    values = {"path": "/a"}
+    action = AddDevice("nixant-mount-a", "disk", values)
+    values["path"] = "/b"
+    assert action.values == {"path": "/a"}
+    with pytest.raises(TypeError):
+        action.values["path"] = "/c"  # type: ignore[index]
 
 
 def test_vm_mounts_limits_are_live(spec: MachineSpec) -> None:

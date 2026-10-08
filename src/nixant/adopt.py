@@ -8,7 +8,7 @@ from nixant.errors import NixantError
 from nixant.models import MachineState, MountSpec
 from nixant.nix.build import gcroot_path
 from nixant.ownership import PREFIX, check_schema
-from nixant.planner import MOUNT_PREFIX, Change, Effect
+from nixant.planner import MOUNT_PREFIX, Change, Effect, SetDevice
 from nixant.project import project_id, state_directory
 from nixant.providers.base import Provider
 from nixant.run import Runner
@@ -97,9 +97,7 @@ def rebase_mounts(
                 "mounts",
                 Effect.LIVE,
                 f"point {device} at {new_source}",
-                "device-set",
-                device,
-                {"source": new_source},
+                SetDevice(device, {"source": new_source}),
             ),
         )
 

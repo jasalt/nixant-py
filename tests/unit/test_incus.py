@@ -8,7 +8,17 @@ import pytest
 
 from nixant.errors import CommandError, NixantError
 from nixant.models import MachineSpec, MountSpec
-from nixant.planner import Change, Effect, mount_device
+from nixant.planner import (
+    Action,
+    AddDevice,
+    Change,
+    Effect,
+    RemoveDevice,
+    SetConfig,
+    SetDevice,
+    SetRootSize,
+    mount_device,
+)
 from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
@@ -350,21 +360,24 @@ def test_find_rejects_malformed_responses(
         provider.find({"user.nixant.managed": "true"})
 
 
+def live(action: Action) -> Change:
+    return Change("x", Effect.LIVE, "", action)
+
+
 @pytest.mark.parametrize(
     ("change", "argv"),
     [
         (
-            Change("cpus", Effect.LIVE, "", "config", "limits.cpu", {"value": "2"}),
+            live(SetConfig("limits.cpu", "2")),
             ["config", "set", "local:dev", "limits.cpu=2"],
         ),
         (
-            Change(
-                "ports",
-                Effect.LIVE,
-                "",
-                "device-add",
-                "nixant-port-8080",
-                {"listen": "tcp:127.0.0.1:8080", "connect": "tcp:127.0.0.1:80"},
+            live(
+                AddDevice(
+                    "nixant-port-8080",
+                    "proxy",
+                    {"listen": "tcp:127.0.0.1:8080", "connect": "tcp:127.0.0.1:80"},
+                )
             ),
             [
                 "config",
@@ -378,14 +391,7 @@ def test_find_rejects_malformed_responses(
             ],
         ),
         (
-            Change(
-                "mounts",
-                Effect.LIVE,
-                "",
-                "device-add",
-                "nixant-mount-a",
-                {"path": "/a"},
-            ),
+            live(AddDevice("nixant-mount-a", "disk", {"path": "/a"})),
             [
                 "config",
                 "device",
@@ -397,40 +403,19 @@ def test_find_rejects_malformed_responses(
             ],
         ),
         (
-            Change(
-                "mounts",
-                Effect.LIVE,
-                "",
-                "device-set",
-                "nixant-mount-a",
-                {"readonly": "true"},
-            ),
+            live(SetDevice("nixant-mount-a", {"readonly": "true"})),
             ["config", "device", "set", "local:dev", "nixant-mount-a", "readonly=true"],
         ),
         (
-            Change("mounts", Effect.LIVE, "", "device-remove", "nixant-mount-a"),
+            live(RemoveDevice("nixant-mount-a")),
             ["config", "device", "remove", "local:dev", "nixant-mount-a"],
         ),
         (
-            Change(
-                "disk",
-                Effect.LIVE,
-                "",
-                "root-size",
-                "root",
-                {"size": "99", "local": ""},
-            ),
+            live(SetRootSize(99, inherited=True)),
             ["config", "device", "override", "local:dev", "root", "size=99"],
         ),
         (
-            Change(
-                "disk",
-                Effect.LIVE,
-                "",
-                "root-size",
-                "root",
-                {"size": "99", "local": "true"},
-            ),
+            live(SetRootSize(99, inherited=False)),
             ["config", "device", "set", "local:dev", "root", "size=99"],
         ),
     ],
@@ -440,9 +425,10 @@ def test_apply_change(provider: IncusProvider, change: Change, argv: list[str]) 
     provider.runner.run.assert_called_once_with(["incus", *argv])
 
 
-def test_apply_rejects_unknown_operation(provider: IncusProvider) -> None:
-    with pytest.raises(NixantError, match="unknown change"):
-        provider.apply("dev", Change("x", Effect.LIVE, "", "explode"))
+def test_unsupported_change_cannot_be_applied(provider: IncusProvider) -> None:
+    with pytest.raises(NixantError, match="cannot be applied"):
+        provider.apply("dev", Change("x", Effect.UNSUPPORTED, "nope"))
+    provider.runner.run.assert_not_called()
 
 
 @pytest.mark.parametrize(

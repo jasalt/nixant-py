@@ -7,9 +7,11 @@ instance (and every profile) is left alone.
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
+from typing import Literal
 
 from nixant.errors import NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec
@@ -40,16 +42,66 @@ class Effect(Enum):
     UNSUPPORTED = "unsupported"
 
 
+DeviceKind = Literal["disk", "proxy"]
+
+
+@dataclass(frozen=True)
+class SetConfig:
+    key: str
+    value: str
+
+
+@dataclass(frozen=True)
+class AddDevice:
+    name: str
+    kind: DeviceKind
+    values: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+
+
+@dataclass(frozen=True)
+class SetDevice:
+    name: str
+    values: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+
+
+@dataclass(frozen=True)
+class RemoveDevice:
+    name: str
+
+
+@dataclass(frozen=True)
+class SetRootSize:
+    """Only the size key of the root device; an inherited one is overridden."""
+
+    size: int
+    inherited: bool
+
+
+Action = SetConfig | AddDevice | SetDevice | RemoveDevice | SetRootSize
+
+
 @dataclass(frozen=True)
 class Change:
-    """One reconciliation step; ``op`` tells the provider how to apply it."""
+    """One reconciliation step; ``action`` is what the provider applies."""
 
     setting: str
     effect: Effect
     summary: str
-    op: str = ""
-    key: str = ""
-    values: Mapping[str, str] = field(default_factory=dict)
+    action: Action | None = None
+
+    def __post_init__(self) -> None:
+        applicable = self.effect in (Effect.LIVE, Effect.RESTART)
+        if applicable != (self.action is not None):
+            raise ValueError(
+                f"{self.effect.value} change {self.summary!r} must "
+                + ("carry an action" if applicable else "not carry an action")
+            )
 
 
 def parse_size(value: str) -> int | None:
@@ -83,21 +135,19 @@ def remount(mount: MountSpec) -> list[Change]:
     """Detach and attach a mount again, for one that never showed up in the guest."""
     name = f"{MOUNT_PREFIX}{mount.name}"
     return [
-        Change("mounts", Effect.LIVE, f"remove {name}", "device-remove", name),
+        Change("mounts", Effect.LIVE, f"remove {name}", RemoveDevice(name)),
         Change(
             "mounts",
             Effect.LIVE,
             f"re-add {name}",
-            "device-add",
-            name,
-            mount_device(mount),
+            AddDevice(name, "disk", mount_device(mount)),
         ),
     ]
 
 
 def _device_changes(
     prefix: str,
-    kind: str,
+    kind: DeviceKind,
     desired: Mapping[str, Mapping[str, str]],
     actual: Mapping[str, Mapping[str, str]],
     effect: Effect,
@@ -126,7 +176,7 @@ def _device_changes(
         current = actual.get(name)
         if current is None:
             additions.append(
-                Change(label, effect, f"add {name}", "device-add", name, wanted)
+                Change(label, effect, f"add {name}", AddDevice(name, kind, wanted))
             )
         elif current.get("type", kind) != kind:
             updates.append(
@@ -146,17 +196,19 @@ def _device_changes(
                 continue
             if unique in drift and held.get(drift[unique], name) != name:
                 removals.append(
-                    Change(label, effect, f"remove {name}", "device-remove", name)
+                    Change(label, effect, f"remove {name}", RemoveDevice(name))
                 )
                 additions.append(
-                    Change(label, effect, f"re-add {name}", "device-add", name, wanted)
+                    Change(
+                        label, effect, f"re-add {name}", AddDevice(name, kind, wanted)
+                    )
                 )
             else:
                 updates.append(
-                    Change(label, effect, f"update {name}", "device-set", name, drift)
+                    Change(label, effect, f"update {name}", SetDevice(name, drift))
                 )
     for name in sorted(obsolete):
-        removals.append(Change(label, effect, f"remove {name}", "device-remove", name))
+        removals.append(Change(label, effect, f"remove {name}", RemoveDevice(name)))
     return removals + updates + additions
 
 
@@ -191,9 +243,7 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
                 "cpus",
                 Effect.LIVE,
                 f"set limits.cpu={spec.cpus}",
-                "config",
-                "limits.cpu",
-                {"value": str(spec.cpus)},
+                SetConfig("limits.cpu", str(spec.cpus)),
             )
         )
     if spec.memory_bytes is not None:
@@ -204,9 +254,7 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
                     "memory",
                     Effect.LIVE,
                     f"set limits.memory={spec.memory_bytes}B",
-                    "config",
-                    "limits.memory",
-                    {"value": str(spec.memory_bytes)},
+                    SetConfig("limits.memory", str(spec.memory_bytes)),
                 )
             )
     if spec.disk_bytes is not None:
@@ -286,8 +334,6 @@ def _disk(wanted: int, state: MachineState, vm: bool) -> list[Change]:
             "disk",
             Effect.RESTART if vm else Effect.LIVE,
             f"set root size={wanted}B",
-            "root-size",
-            "root",
-            {"size": str(wanted), "local": "true" if "root" in state.devices else ""},
+            SetRootSize(wanted, inherited="root" not in state.devices),
         )
     ]
