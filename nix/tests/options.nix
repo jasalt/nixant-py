@@ -70,7 +70,10 @@ let
     agentWritableExtraMount = rejects { nixant.isolation = "agent"; nixant.mounts.data = { source = "/d"; target = "/data"; }; };
     agentReadOnlyExtraMount = succeeds (evaluate { nixant.isolation = "agent"; nixant.mounts.data = { source = "/d"; target = "/data"; readOnly = true; }; });
     agentWorkspaceStaysWritable = !(evaluate { nixant.isolation = "agent"; }).mounts.workspace.readOnly;
-    agentPorts = rejects { nixant.isolation = "agent"; nixant.ports = [{ host = 8080; guest = 80; }]; };
+    agentLoopbackPorts = succeeds (evaluate { nixant.isolation = "agent"; nixant.ports = [{ host = 8080; guest = 80; }]; });
+    agentExplicitLoopback = succeeds (evaluate { nixant.isolation = "agent"; nixant.ports = [{ host = 8080; guest = 80; address = "127.0.0.1"; }]; });
+    agentExposedPorts = rejects { nixant.isolation = "agent"; nixant.ports = [{ host = 8080; guest = 80; address = "0.0.0.0"; }]; };
+    agentMixedPorts = rejects { nixant.isolation = "agent"; nixant.ports = [{ host = 8080; guest = 80; } { host = 8081; guest = 81; address = "192.168.1.5"; }]; };
     agentSudo = rejects { nixant.isolation = "agent"; nixant.user.sudo = true; };
     badIsolation = rejects { nixant.isolation = "paranoid"; };
     readOnly = rejects { nixant.runtime = {}; };

@@ -45,6 +45,7 @@ let
   targets = map (mount: mount.target) (builtins.attrValues mounts);
   hostPorts = map (port: port.host) cfg.ports;
   agent = cfg.isolation == "agent";
+  nonLoopbackPorts = builtins.filter (port: port.address != "127.0.0.1") cfg.ports;
   extraWritableMounts = builtins.attrNames
     (lib.filterAttrs (name: mount: name != "workspace" && !mount.readOnly) mounts);
   validations = [
@@ -66,8 +67,8 @@ let
       message = "nixant.isolation = \"agent\" forbids nixant.user.sudo; remove the override."; }
     { assertion = !agent || extraWritableMounts == [];
       message = "nixant.isolation = \"agent\" only allows writing to the workspace mount; make these read-only: ${lib.concatStringsSep ", " extraWritableMounts}."; }
-    { assertion = !agent || cfg.ports == [];
-      message = "nixant.isolation = \"agent\" does not publish host ports; remove nixant.ports."; }
+    { assertion = !agent || nonLoopbackPorts == [];
+      message = "nixant.isolation = \"agent\" only publishes loopback ports; set address = \"127.0.0.1\" or remove these nixant.ports entries: ${lib.concatStringsSep ", " (map (port: "${port.address}:${toString port.host}") nonLoopbackPorts)}."; }
     { assertion = lib.versionAtLeast lib.trivial.release "26.05";
       message = "nixant requires nixpkgs 26.05 or newer: the bootstrap image is newer, and switching a guest down to an older release hangs in switch-to-configuration."; }
   ];
@@ -89,7 +90,7 @@ in {
       description = ''
         "agent" restricts the guest for autonomous coding agents: no sudo, no
         wheel membership, not a trusted Nix user, only the workspace mount
-        writable, no published ports, and default CPU/memory caps.
+        writable, host ports only on 127.0.0.1, and default CPU/memory caps.
       '';
     };
     cpus = mkOption { type = types.nullOr types.ints.positive; default = if agent then 2 else null; };
