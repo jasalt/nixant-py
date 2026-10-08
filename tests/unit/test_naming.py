@@ -29,6 +29,16 @@ def git(root: Path, *args: str) -> str:
     ).stdout
 
 
+@pytest.fixture(autouse=True)
+def global_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep the developer's own git config out of these tests."""
+    path = tmp_path / "global.gitconfig"
+    path.write_text("")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(path))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    return path
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     root = tmp_path / "shop"
@@ -124,6 +134,40 @@ def test_new_worktree_after_override_stays_independent(
     assert set_override(linked, "dev", "shop-linked", runner) == "worktree"
     assert get_override(repo, "dev", runner) == "shop-main"
     assert get_override(linked, "dev", runner) == "shop-linked"
+
+
+def test_global_override_is_ignored_with_a_warning(
+    repo: Path, global_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    global_config.write_text('[nixant "dev"]\n\tinstanceName = from-global\n')
+    runner = Runner()
+    assert get_override(repo, "dev", runner) is None
+    assert "ignoring nixant.dev.instanceName in global git config" in (
+        capsys.readouterr().err
+    )
+    # A checkout's own value still wins, and unset never touches global config.
+    assert set_override(repo, "dev", "shop-mine", runner) == "local"
+    assert get_override(repo, "dev", runner) == "shop-mine"
+    assert unset_override(repo, "dev", runner) == "local"
+    assert unset_override(repo, "dev", runner) is None
+    assert "from-global" in global_config.read_text()
+
+
+def test_name_unset_with_only_a_global_value(cli: dict, global_config: Path) -> None:
+    global_config.write_text('[nixant "dev"]\n\tinstanceName = from-global\n')
+    result = CliRunner().invoke(app, ["name", "dev", "--unset"])
+    assert result.exit_code == 0, result.output
+    assert "no override set for dev" in result.output
+
+
+def test_worktree_value_outranks_local(repo: Path, tmp_path: Path) -> None:
+    runner = Runner()
+    git(repo, "config", "nixant.dev.instanceName", "shop-local")
+    git(repo, "config", "extensions.worktreeConfig", "true")
+    git(repo, "config", "--worktree", "nixant.dev.instanceName", "shop-tree")
+    assert get_override(repo, "dev", runner) == "shop-tree"
+    assert unset_override(repo, "dev", runner) == "worktree"
+    assert get_override(repo, "dev", runner) == "shop-local"
 
 
 def test_invalid_override_in_config_is_reported(repo: Path) -> None:

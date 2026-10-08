@@ -1,6 +1,7 @@
 """Per-checkout instance-name overrides, stored in the checkout's git config."""
 
 import re
+import sys
 from pathlib import Path
 
 from nixant.errors import NixantError, UsageError
@@ -40,19 +41,43 @@ def propose(committed: str, checkout: Path) -> str:
     return validate_instance_name(f"{head}-{suffix}"[:63].rstrip("-"))
 
 
-def get_override(root: Path, target: str, runner: Runner) -> str | None:
-    """The checkout's override for this target, or None (also outside git)."""
-    if not in_git_work_tree(root, runner):
-        return None
+# The override belongs to one checkout; a value in ~/.gitconfig or system
+# config would rename the target in every project.
+REPO_SCOPES = ("local", "worktree")
+
+
+def _entries(root: Path, target: str, runner: Runner) -> list[tuple[str, str]]:
+    """(scope, value) for every definition of the key, lowest precedence first."""
     result = runner.run(
-        ["git", "config", "--get", config_key(target)],
+        ["git", "config", "--show-scope", "--get-all", config_key(target)],
         cwd=root,
         capture=True,
         check=False,
     )
     if result.returncode != 0:
+        return []
+    entries = []
+    for line in result.stdout.decode().splitlines():
+        scope, _, value = line.partition("\t")
+        entries.append((scope, value.strip()))
+    return entries
+
+
+def get_override(root: Path, target: str, runner: Runner) -> str | None:
+    """The checkout's override for this target, or None (also outside git)."""
+    if not in_git_work_tree(root, runner):
         return None
-    value = result.stdout.decode().strip()
+    entries = _entries(root, target, runner)
+    ignored = sorted({scope for scope, _ in entries if scope not in REPO_SCOPES})
+    if ignored:
+        print(
+            f"warning: ignoring {config_key(target)} in {', '.join(ignored)} git "
+            "config; instance-name overrides only apply per checkout "
+            f"(nixant name {target})",
+            file=sys.stderr,
+        )
+    values = [value for scope, value in entries if scope in REPO_SCOPES]
+    value = values[-1] if values else ""
     if not value:
         return None
     try:
@@ -105,16 +130,10 @@ def unset_override(root: Path, target: str, runner: Runner) -> str | None:
         raise NixantError(
             "outside a git work tree there is nowhere to store the override"
         )
-    key = config_key(target)
-    found = runner.run(
-        ["git", "config", "--show-scope", "--get", key],
-        cwd=root,
-        capture=True,
-        check=False,
-    )
-    if found.returncode != 0:
+    entries = [e for e in _entries(root, target, runner) if e[0] in REPO_SCOPES]
+    if not entries:
         return None
-    scope = found.stdout.decode().split()[0]
+    scope = entries[-1][0]
     flag = "--worktree" if scope == "worktree" else "--local"
-    runner.run(["git", "config", flag, "--unset", key], cwd=root)
+    runner.run(["git", "config", flag, "--unset-all", config_key(target)], cwd=root)
     return scope
