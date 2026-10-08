@@ -16,3 +16,4 @@ dist/
 .beads/proxieddb/
 *.gate.lock*
 examples/*/flake.lock
+/.pig/
