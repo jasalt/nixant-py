@@ -149,12 +149,14 @@ The workspace exposes gitignored files such as `.env`, tokens, private fixtures,
 and repository-local credentials. Git/Nix tracking rules do not hide files from
 a bind mount.
 
-Agent mode prohibits declared port-forwarding devices but does not restrict
+Agent mode allows port-forwarding devices only on the host's loopback address
+(`nixant.ports` entries with `address = "127.0.0.1"`), so a guest service can
+be reached from the host but not from the network. It does not restrict
 outbound networking. Malicious code can exfiltrate readable secrets, establish
 reverse connections, or access reachable host-bridge, LAN, and other guest
 services. Direct access to services on the guest IP depends on the network,
-service bindings, and firewall configuration; no published proxy does not mean
-network isolation. A service bound only to host loopback is not automatically
+service bindings, and firewall configuration; having no non-loopback proxy does
+not mean network isolation. A service bound only to host loopback is not automatically
 reachable through the bridge.
 
 Read-only mounts still expose their contents. They also do not neutralize a

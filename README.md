@@ -114,7 +114,7 @@ nixant = {
 `nixant.isolation = "agent"` restricts the guest for autonomous coding agents:
 
 - no passwordless sudo, no `wheel` membership, and the user is not a trusted Nix user;
-- only the `workspace` mount may be writable (other mounts must set `readOnly = true`), and no host ports are published;
+- only the `workspace` mount may be writable (other mounts must set `readOnly = true`), and host ports may only be forwarded on `127.0.0.1` (the default `address`), so a service in the guest can be reached from the host but not from the network;
 - `cpus = 2` and `memory = "4GiB"` unless you set them.
 
 Violations fail at evaluation time with a message naming the offending option. The profile does not restrict the guest's network access.

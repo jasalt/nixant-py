@@ -670,6 +670,8 @@ cpus/memory/disk limits, ports, multiple and read-only mounts, planner with clas
 
 Snapshots/restore, ephemeral instances, agent-oriented restricted profiles.
 
+The agent profile publishes host ports only on `127.0.0.1` (proxy devices let the host reach guest services; they do not open outbound access). Other addresses are rejected at evaluation time.
+
 Known limits, documented rather than fixed (see `security.md` and the README):
 
 - The agent profile is not a sandbox. The writable workspace includes `.git/hooks`, `.git/config` (`core.hooksPath`, `core.fsmonitor`) and `.envrc`, which host tools, including nixant's own `git` calls, execute as the host user. Hardening follows the order in `security.md`.
