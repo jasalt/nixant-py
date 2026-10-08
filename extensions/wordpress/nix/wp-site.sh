@@ -24,6 +24,7 @@ load_settings() {
   admin_user=$(setting .admin.user)
   admin_password=$(setting .admin.password)
   admin_email=$(setting .admin.email)
+  workspace=$(setting .workspace)
   db_name=$(setting .db.name)
   db_user=$(setting .db.user)
   db_socket=$(setting .db.socket)
@@ -119,6 +120,58 @@ converge_urls() {
   fi
 }
 
+# Symlink every declared plugin or theme into wp-content, so host edits in the
+# workspace are live. Links this module created earlier (they point into the
+# workspace) but that are no longer declared are removed.
+link_components() {
+  local kind=$1 dir="$root/wp-content/$1" slug path source target link
+  mkdir -p "$dir"
+  while IFS=$'\t' read -r slug path; do
+    source="$workspace/$path"
+    target="$dir/$slug"
+    [ -e "$source" ] || die "$kind $slug: $source does not exist in the workspace"
+    if [ -L "$target" ]; then
+      ln -sfn "$source" "$target"
+    elif [ -e "$target" ]; then
+      die "$kind $slug: $target exists and is not a symlink; remove it or rename the $kind"
+    else
+      ln -s "$source" "$target"
+    fi
+  done < <(jq -r --arg kind "$kind" '.[$kind] | to_entries[] | [.key, .value.path] | @tsv' "$WP_SITE_SETTINGS")
+
+  for link in "$dir"/*; do
+    [ -L "$link" ] || continue
+    case "$(readlink "$link")" in
+      "$workspace"/*) ;;
+      *) continue ;;
+    esac
+    slug=${link##*/}
+    if ! jq -e --arg kind "$kind" --arg slug "$slug" '.[$kind] | has($slug)' "$WP_SITE_SETTINGS" >/dev/null; then
+      echo "wp-site: removing $kind $slug, no longer declared"
+      if [ "$kind" = plugins ]; then
+        wp plugin deactivate "$slug"
+      fi
+      rm "$link"
+    fi
+  done
+}
+
+activate_components() {
+  local slug theme
+  while read -r slug; do
+    wp plugin activate "$slug"
+  done < <(jq -r '.plugins | to_entries[] | select(.value.activate) | .key' "$WP_SITE_SETTINGS")
+  theme=$(jq -r '.activeTheme // empty' "$WP_SITE_SETTINGS")
+  if [ -n "$theme" ]; then
+    # Linked and bundled themes are installed already; anything else comes
+    # from wordpress.org, the one step that needs network access.
+    if ! wp theme is-installed "$theme"; then
+      wp theme install "$theme"
+    fi
+    wp theme activate "$theme"
+  fi
+}
+
 report() {
   cat <<REPORT
 WordPress is ready:
@@ -137,6 +190,9 @@ setup() {
   wait_for_database
   install_site
   converge_urls
+  link_components plugins
+  link_components themes
+  activate_components
   report
 }
 

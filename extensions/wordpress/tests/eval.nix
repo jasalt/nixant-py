@@ -92,6 +92,21 @@ let
       && base_.config.environment.etc."wp-cli/config.yml".text == "path: /var/lib/wordpress\n"
       && lib.any (p: (p.pname or "") == "wp-cli") base_.config.environment.systemPackages;
     badConstantName = fails "PHP constant names" { extra.wordpress.wpConfig."BAD NAME" = true; };
+    componentsInSettings = let
+      settings = settingsOf (evaluate { extra.wordpress = {
+        plugins.my-plugin = { path = "plugins/my-plugin"; };
+        plugins.inactive = { path = "plugins/inactive"; activate = false; };
+        themes.my-theme.path = "themes/my-theme";
+        activeTheme = "my-theme";
+      }; });
+    in settings.workspace == "/workspace"
+      && settings.plugins.my-plugin == { path = "plugins/my-plugin"; activate = true; }
+      && !settings.plugins.inactive.activate
+      && settings.themes.my-theme.path == "themes/my-theme" && settings.activeTheme == "my-theme";
+    componentsNeedWorkspace = fails "keep nixant.mounts.workspace enabled" {
+      extra.wordpress.plugins.p.path = "p";
+      extra.nixant.mounts.workspace.enable = false;
+    };
     nothingWhenDisabled = !(evaluate { extra.wordpress.enable = lib.mkForce false; }).config.services.caddy.enable;
     defaultsAreDevelopmentOnly = base.admin.user == "admin" && base.wpConfig.WP_DEBUG_DISPLAY == false;
 

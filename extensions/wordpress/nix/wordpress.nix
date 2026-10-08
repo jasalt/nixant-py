@@ -198,7 +198,8 @@ in {
         # Everything wp-site setup needs; a change reruns the setup unit.
         settingsFile = pkgs.writeText "wordpress-site.json" (builtins.toJSON {
           inherit root;
-          inherit (cfg) title url admin wpConfig;
+          inherit (cfg) title url admin wpConfig plugins themes activeTheme;
+          workspace = config.nixant.mounts.workspace.target;
           core = "${cfg.package}";
           coreId = builtins.baseNameOf "${cfg.package}";
           db = db // { user = user; };
@@ -206,6 +207,11 @@ in {
             else "http://localhost:${toString (builtins.head uiPort).host}";
         });
       in {
+        assertions = [{
+          assertion = (cfg.plugins == {} && cfg.themes == {}) || config.nixant.mounts.workspace.enable;
+          message = "wordpress.plugins and wordpress.themes link from the workspace mount; keep nixant.mounts.workspace enabled.";
+        }];
+
         # PHP-FPM, Caddy and the setup unit all run as the nixant user, so the
         # idmapped workspace mount is readable and writable without extra groups.
         # `nixant exec -- wp ...` works from any directory: bash -lc reads
