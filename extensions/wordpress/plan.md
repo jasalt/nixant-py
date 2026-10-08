@@ -1,6 +1,6 @@
 # nixant-wp: implementation plan
 
-An isolated WordPress development environment per client project, built as a NixOS module on top of [nixant](../nixant). Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server, Mailpit, snapshots and (optionally) agent isolation.
+An isolated WordPress development environment per client project, built as a NixOS module on top of [nixant](https://github.com/jasalt/nixant-py). Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server, Mailpit, snapshots and (optionally) agent isolation.
 
 The whole WordPress installation (core, `wp-config.php`, `wp-content`) lives in a directory of the client repository on the host and is served from the workspace mount; the guest holds the database and the services. WordPress is mutable and manages itself; nixant-wp provides the stack, creates what is missing and keeps the database connection and URL current.
 
@@ -122,7 +122,7 @@ Assertions: nixant module imported; `root` is safe; workspace mount enabled; `ur
 
 ### Template (`templates/default`)
 
-`flake.nix` with inputs `nixpkgs` (nixos-unstable), `nixant` and `nixant-wp`, both following `nixpkgs`, and `nixosConfigurations.dev` importing `nixant.nixosModules.container`, `nixant-wp.nixosModules.wordpress` and `./nix/site.nix`. `nix/site.nix` sets `nixant.instanceName`, `nixant.user.uid`, `nixant.ports` (8081→80, 8025→8025) and `wordpress = { enable; title; root = "public"; }`. `.gitignore` as in Decision 17. Until nixant is published, the README documents `--override-input nixant path:/path/to/nixant` for local use.
+`flake.nix` with inputs `nixpkgs` (nixos-unstable), `nixant` and `nixant-wp`, both following `nixpkgs`, and `nixosConfigurations.dev` importing `nixant.nixosModules.container`, `nixant-wp.nixosModules.wordpress` and `./nix/site.nix`. `nix/site.nix` sets `nixant.instanceName`, `nixant.user.uid`, `nixant.ports` (8081→80, 8025→8025) and `wordpress = { enable; title; root = "public"; }`. `.gitignore` as in Decision 17. The template makes nixant-wp's test-only `nixant` input follow the project's (`nixant-wp.inputs.nixant.follows = "nixant"`), so a project locks one nixant; the README documents `--override-input` for working against local checkouts.
 
 ## Workflow (MVP)
 

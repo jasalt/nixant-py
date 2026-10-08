@@ -14,7 +14,8 @@ let
     urlDerived = config.wordpress.url == "http://localhost:8081";
     mailpitForwarded = lib.any (port: port.guest == 8025) config.nixant.ports;
     inputsFollowNixpkgs = inputs.nixant.inputs.nixpkgs.follows == "nixpkgs"
-      && inputs.nixant-wp.inputs.nixpkgs.follows == "nixpkgs";
+      && inputs.nixant-wp.inputs.nixpkgs.follows == "nixpkgs"
+      && inputs.nixant-wp.inputs.nixant.follows == "nixant";
     rootIsPublic = config.wordpress.root == "public";
     gitignoreKeepsSiteOut = lib.hasInfix "/public/*\n" (builtins.readFile (template + "/.gitignore"));
   };

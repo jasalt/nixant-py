@@ -7,17 +7,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1791447423,
-        "narHash": "sha256-W0+qI9iVnsLrbwF6a9oS8lf0xchN0oIRgIsVucFKbkI=",
-        "ref": "refs/heads/master",
-        "rev": "4c1d6e816a0ba50feced5fd6fc690605575e31e9",
-        "revCount": 83,
-        "type": "git",
-        "url": "file:///home/user/dev/jail/nixant"
+        "lastModified": 1791487189,
+        "narHash": "sha256-mu13bd2v6gTkXNek2lX8+EaH606VqbHdpBdySR1zpPc=",
+        "owner": "jasalt",
+        "repo": "nixant-py",
+        "rev": "fba3c4c004647c31b77e55158ebb39a0953a6514",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "file:///home/user/dev/jail/nixant"
+        "owner": "jasalt",
+        "repo": "nixant-py",
+        "type": "github"
       }
     },
     "nixpkgs": {

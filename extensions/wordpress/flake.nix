@@ -2,10 +2,10 @@
   description = "Isolated WordPress development environments on nixant";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  # Test-only: the module itself does not import nixant, client flakes do.
-  # Unpublished for now; switch to github:jasalt/nixant-py once it is.
+  # Test-only: the module itself does not import nixant, client flakes do (and
+  # should make this input follow theirs, as the template does).
   inputs.nixant = {
-    url = "git+file:///home/user/dev/jail/nixant";
+    url = "github:jasalt/nixant-py";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 

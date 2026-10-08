@@ -1,17 +1,17 @@
 # nixant-wp
 
-An isolated WordPress development environment per client project, built as a NixOS module on top of [nixant](../nixant). Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server and Mailpit inbox. Nothing is shared between clients.
+An isolated WordPress development environment per client project, built as a NixOS module on top of [nixant](https://github.com/jasalt/nixant-py). Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server and Mailpit inbox. Nothing is shared between clients.
 
 The whole WordPress site, meaning core, `wp-config.php` and `wp-content`, lives in a directory of the project on the host (`public/` by default) and is served from there by the guest. Your editor and language server see every file WordPress runs, and anything WordPress writes, such as uploads, plugin installs and core updates, shows up on the host right away, owned by you. The guest holds only the database and the services.
 
 WordPress manages itself the usual way: install and update plugins, themes and core in wp-admin or with WP-CLI. `nixant up` only creates what is missing (core, `wp-config.php`, the installation) and keeps the database connection and the URL current. Rerunning it is safe.
 
-Status: MVP. One site per instance. See `plan.md` for the design and what comes later.
+Status: MVP. One site per instance. See `plan.md` for the design and what comes later, and [nixant-wp-demo](https://github.com/jasalt/nixant-wp-demo) for a worked example: a custom theme and content model, provisioning scripts, and a CI workflow that publishes a static export to GitHub Pages.
 
 ## Requirements
 
 - Everything nixant needs: Linux x86_64, multi-user Nix with flakes, Incus, your user in `incus-admin`.
-- nixant itself. It is not published yet, so the commands below use a local checkout (`NIXANT=/path/to/nixant`). Once published, drop the `--override-input` flags.
+- The `nixant` command: `nix profile install github:jasalt/nixant-py`. Without it, `nix run github:jasalt/nixant-py --` works too, but re-evaluates on every call (seconds per `nixant exec -- wp ...`).
 - The guest user's UID must equal your host UID (`id -u`), so the mounted project directory stays writable and files WordPress creates are yours.
 - A container, not a VM (`nixant.nixosModules.container`). The site is served from the shared directory, which is a native bind mount in a container but a much slower virtiofs share in a VM, and nixant forwards ports only to containers.
 
@@ -19,14 +19,12 @@ Status: MVP. One site per instance. See `plan.md` for the design and what comes 
 
 ```console
 $ mkdir client-a && cd client-a && git init
-$ nix flake init -t path:/path/to/nixant-wp
+$ nix flake init -t github:jasalt/nixant-wp
 $ $EDITOR nix/site.nix            # instanceName, uid, ports
 $ git add -A
-$ nix flake lock \
-    --override-input nixant path:$NIXANT \
-    --override-input nixant-wp path:/path/to/nixant-wp
+$ nix flake lock
 $ git add -A
-$ nix run path:$NIXANT -- up      # or `nixant up` if installed
+$ nixant up
 ```
 
 When `up` finishes (`... ready`):
@@ -36,6 +34,8 @@ When `up` finishes (`... ready`):
 - `public/` holds the WordPress installation.
 
 `flake.nix` and `nix/site.nix` must be tracked in git, as for any nixant project.
+
+The template's `flake.nix` makes nixant-wp's own `nixant` input (used only by nixant-wp's tests) follow the project's, so the project locks a single nixant. To work on nixant or nixant-wp themselves, lock a project to local checkouts with `nix flake lock --override-input nixant path:/path/to/nixant-py --override-input nixant-wp path:/path/to/nixant-wp`, and back to the published ones with `nix flake update nixant nixant-wp`.
 
 ### An existing site
 
