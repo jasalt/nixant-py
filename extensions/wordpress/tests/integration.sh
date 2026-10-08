@@ -18,6 +18,14 @@ clients=(a b)
 declare -A ports=([a]=8081 [b]=8082)
 declare -A ui_ports=([a]=8025 [b]=8026)
 
+# Fetch a page and require a pattern. `curl | grep -q` would fail under
+# pipefail whenever grep exits before curl has finished writing.
+page_has() {
+  local port=$1 pattern=$2 body
+  body=$(curl -fs "http://localhost:$port/") || return 1
+  grep -q -- "$pattern" <<<"$body"
+}
+
 step() { printf '\n==> %s\n' "$*"; }
 fail() { echo "integration: FAIL: $*" >&2; exit 1; }
 
@@ -98,13 +106,13 @@ step "clients are isolated"
 for client in "${clients[@]}"; do
   [ "$(ncli "$client" exec -- wp option get blogname)" = "Client $client" ] || fail "client $client has the wrong title"
   [ "$(ncli "$client" exec -- wp option get home)" = "http://localhost:${ports[$client]}" ] || fail "client $client has the wrong home URL"
-  curl -fs "http://localhost:${ports[$client]}/" | grep -q "<title>Client $client" || fail "client $client does not serve its own site"
+  page_has "${ports[$client]}" "<title>Client $client" || fail "client $client does not serve its own site"
 done
 
 step "host edit of a linked plugin is live without nixant up"
-curl -fs "http://localhost:${ports[a]}/" | grep -q 'it-plugin v1' || fail "plugin output v1 missing"
+page_has "${ports[a]}" 'it-plugin v1' || fail "plugin output v1 missing"
 sed -i 's/it-plugin v1/it-plugin v2/' "$work/a/plugins/it-plugin/it-plugin.php"
-curl -fs "http://localhost:${ports[a]}/" | grep -q 'it-plugin v2' || fail "host edit did not show up"
+page_has "${ports[a]}" 'it-plugin v2' || fail "host edit did not show up"
 
 step "rerunning nixant up is a no-op"
 invocation() { ncli a exec -- systemctl show wordpress-setup -p InvocationID --value; }
