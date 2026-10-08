@@ -98,12 +98,17 @@ def commands(runner: Mock) -> list[list[str]]:
 def test_init_writes_rewrites_locks_and_stages(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A build without a revision (dirty tree, dev shell) locks its own source.
+
+    The environment is exactly what the package wrapper sets for such a build;
+    test_init_lock.py checks the real packaged CLI in both modes.
+    """
     project = tmp_path / "Shop"
     project.mkdir()
     provider = Mock()
     provider.inspect.return_value = None
     runner = fake_runner(project)
-    env = {"NIXANT_SELF": str(REPO)}
+    env = {"NIXANT_SELF": str(REPO), "NIXANT_REV": ""}
     init_project(project, "default", runner, provider, env)
     flake = (project / "flake.nix").read_text()
     assert 'nixant.instanceName = "shop-dev";' in flake
@@ -112,12 +117,14 @@ def test_init_writes_rewrites_locks_and_stages(
     assert ["git", "add", "--", "flake.nix", "nix/dev.nix"] in commands(runner)
     assert ["nix", "flake", "lock"] in commands(runner)
     assert ["git", "add", "--", "flake.lock"] in commands(runner)
-    out = capsys.readouterr().out
-    assert "wrote flake.nix nix/dev.nix (instanceName: shop-dev)" in out
-    assert "next: nixant up" in out
+    captured = capsys.readouterr()
+    assert "wrote flake.nix nix/dev.nix (instanceName: shop-dev)" in captured.out
+    assert "next: nixant up" in captured.out
+    assert "not to this CLI" not in captured.err
 
 
 def test_init_pins_revision_with_canonical_url(tmp_path: Path) -> None:
+    """The environment of a clean package build: canonical URL and revision."""
     runner = fake_runner(tmp_path)
     env = {
         "NIXANT_SELF": str(REPO),
@@ -138,11 +145,16 @@ def test_init_pins_revision_with_canonical_url(tmp_path: Path) -> None:
     assert 'nixant.url = "github:o/r";' in (tmp_path / "flake.nix").read_text()
 
 
-def test_init_without_revision_warns(
+def test_url_override_without_revision_warns(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """The package never sets a URL without a revision, but a user may.
+
+    A dirty build exports NIXANT_REV="" and leaves NIXANT_FLAKE_URL to the
+    caller, so this is what an override on such a build looks like.
+    """
     runner = fake_runner(tmp_path)
-    env = {"NIXANT_SELF": str(REPO), "NIXANT_FLAKE_URL": "github:o/r"}
+    env = {"NIXANT_SELF": str(REPO), "NIXANT_FLAKE_URL": "github:o/r", "NIXANT_REV": ""}
     init_project(
         tmp_path, "default", runner, Mock(inspect=Mock(return_value=None)), env
     )

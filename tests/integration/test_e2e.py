@@ -35,6 +35,8 @@ def test_happy_path(project: Project) -> None:
     project.exec("sudo", "true")
     assert "wheel" in project.exec("id", "-Gn").stdout.split()
     assert project.incus_config("user.nixant.activation") == "ok"
+    # exec hands the caller's stdin to the guest command.
+    assert project.nixant("exec", "--", "cat", input="piped\n").stdout == "piped\n"
 
     created = instance_created_at(project.instance)
     project.write_module(
