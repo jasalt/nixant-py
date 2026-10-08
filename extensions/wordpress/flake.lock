@@ -1,0 +1,48 @@
+{
+  "nodes": {
+    "nixant": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1791440869,
+        "narHash": "sha256-I9o2H4AXzLxq1p/OHWr2AgeN5i9dkm2S6z/ST+nZTRc=",
+        "ref": "refs/heads/master",
+        "rev": "cb1d8935e7a0295787d47f02f123cf7bf19963c7",
+        "revCount": 80,
+        "type": "git",
+        "url": "file:///home/user/dev/jail/nixant"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///home/user/dev/jail/nixant"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1791260994,
+        "narHash": "sha256-Miqqk/ammqnTUxaoCyvtwoPeLbI1ksFyLxi/CazZpWY=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "151fa4e8ddfdd8dd25d945ad94ed54a13de9f6e4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixant": "nixant",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
