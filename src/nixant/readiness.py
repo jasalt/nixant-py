@@ -7,6 +7,11 @@ from nixant.errors import NixantError
 from nixant.incus import IncusProvider
 
 
+def readiness_timeout(kind: str) -> float:
+    """How long a booting instance may take to become ready."""
+    return 180 if kind == "vm" else 60
+
+
 def wait_ready(
     provider: IncusProvider,
     name: str,
@@ -15,7 +20,7 @@ def wait_ready(
     verbose: bool = False,
     timeout: float | None = None,
 ) -> str:
-    duration = timeout if timeout is not None else (180 if kind == "vm" else 60)
+    duration = timeout if timeout is not None else readiness_timeout(kind)
     deadline = time.monotonic() + duration
     last = "exec unavailable"
     while (remaining := deadline - time.monotonic()) > 0:

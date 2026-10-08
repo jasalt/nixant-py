@@ -8,7 +8,7 @@ from nixant.errors import CommandError, NixantError
 from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState
 from nixant.ownership import PREFIX
-from nixant.readiness import wait_ready
+from nixant.readiness import readiness_timeout, wait_ready
 from nixant.run import Runner
 
 
@@ -124,8 +124,17 @@ def activate(
         print(f"new system needs a restart; restarting {name}", file=sys.stderr)
         try:
             # The original deadline covers recovery too; never restart the budget.
+            # It only caps readiness, though: a guest that does not come back
+            # fails after the usual boot allowance, not the whole deadline.
             provider.restart(name, timeout=remaining())
-            ready = wait_ready(provider, name, spec.kind, timeout=remaining())
+            left = remaining()
+            boot = readiness_timeout(spec.kind)
+            ready = wait_ready(
+                provider,
+                name,
+                spec.kind,
+                timeout=boot if left is None else min(boot, left),
+            )
             current = provider.run(
                 name,
                 ["readlink", "-f", "/run/current-system"],

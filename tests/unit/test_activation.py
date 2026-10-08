@@ -2,6 +2,7 @@ import io
 import json
 import subprocess
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -324,3 +325,23 @@ def test_reboot_recovery_shares_original_deadline(
     assert ready.call_args.kwargs["timeout"] == 7
     assert provider.run.call_args.kwargs["timeout"] == 5
     assert events[-1][PREFIX + "activation"] == "ok"
+
+
+@pytest.mark.parametrize(("kind", "allowance"), [("container", 60), ("vm", 180)])
+def test_reboot_recovery_readiness_keeps_the_boot_allowance(
+    spec: MachineSpec, monkeypatch: pytest.MonkeyPatch, kind: str, allowance: int
+) -> None:
+    """A long activation deadline must not stretch the wait for a dead guest."""
+    provider, runner, _ = setup(100)
+    monkeypatch.setattr("nixant.nix.activate.time.monotonic", lambda: 0.0)
+    provider.run.side_effect = [
+        result(),
+        result(),
+        result(100),
+        result(stdout=SYSTEM.encode()),
+    ]
+    ready = Mock(return_value="running")
+    monkeypatch.setattr("nixant.nix.activate.wait_ready", ready)
+    activate(provider, runner, replace(spec, kind=kind), SYSTEM, timeout=1800)
+    assert provider.restart.call_args.kwargs["timeout"] == 1800
+    assert ready.call_args.kwargs["timeout"] == allowance
