@@ -74,16 +74,34 @@ def _device_changes(
     actual: Mapping[str, Mapping[str, str]],
     effect: Effect,
     label: str,
+    unique: str,
 ) -> list[Change]:
-    changes: list[Change] = []
+    """Removals first, then in-place updates, then additions.
+
+    Incus rejects two devices sharing a ``unique`` value (a disk path, a proxy
+    listen address) at every step, so a value must be released before another
+    device takes it. An update that takes a value still held by a different
+    managed device is turned into remove-then-add, which also breaks swaps.
+    """
+    removals: list[Change] = []
+    updates: list[Change] = []
+    additions: list[Change] = []
+    obsolete = {
+        name for name in actual if name.startswith(prefix) and name not in desired
+    }
+    held = {
+        device.get(unique): name
+        for name, device in actual.items()
+        if name.startswith(prefix) and name not in obsolete
+    }
     for name, wanted in sorted(desired.items()):
         current = actual.get(name)
         if current is None:
-            changes.append(
+            additions.append(
                 Change(label, effect, f"add {name}", "device-add", name, wanted)
             )
         elif current.get("type", kind) != kind:
-            changes.append(
+            updates.append(
                 Change(
                     label,
                     Effect.UNSUPPORTED,
@@ -96,16 +114,22 @@ def _device_changes(
                 for key, value in wanted.items()
                 if current.get(key, "false" if key == "readonly" else "") != value
             }
-            if drift:
-                changes.append(
+            if not drift:
+                continue
+            if unique in drift and held.get(drift[unique], name) != name:
+                removals.append(
+                    Change(label, effect, f"remove {name}", "device-remove", name)
+                )
+                additions.append(
+                    Change(label, effect, f"re-add {name}", "device-add", name, wanted)
+                )
+            else:
+                updates.append(
                     Change(label, effect, f"update {name}", "device-set", name, drift)
                 )
-    for name in sorted(actual):
-        if name.startswith(prefix) and name not in desired:
-            changes.append(
-                Change(label, effect, f"remove {name}", "device-remove", name)
-            )
-    return changes
+    for name in sorted(obsolete):
+        removals.append(Change(label, effect, f"remove {name}", "device-remove", name))
+    return removals + updates + additions
 
 
 def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
@@ -172,6 +196,7 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
             state.devices,
             Effect.LIVE,  # virtiofs hot-plug, retarget and removal work on running VMs
             "mounts",
+            "path",
         )
     )
     if spec.kind == "vm" and spec.ports:
@@ -203,6 +228,7 @@ def _ports(spec: MachineSpec, state: MachineState) -> list[Change]:
             state.devices,
             Effect.LIVE,
             "ports",
+            "listen",
         )
     )
 

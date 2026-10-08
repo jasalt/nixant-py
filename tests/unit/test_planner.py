@@ -127,9 +127,9 @@ def test_ports_add_update_remove(spec: MachineSpec) -> None:
     )
     changes = plan(spec, current)
     assert [(c.op, c.key) for c in changes] == [
-        ("device-add", "nixant-port-8080"),
-        ("device-set", "nixant-port-9090"),
         ("device-remove", "nixant-port-7000"),
+        ("device-set", "nixant-port-9090"),
+        ("device-add", "nixant-port-8080"),
     ]
     assert changes[1].values == {
         "listen": "tcp:0.0.0.0:9090",
@@ -160,6 +160,51 @@ def test_mounts_add_change_remove_are_live_for_containers(spec: MachineSpec) -> 
     }
     set_change = next(c for c in changes if c.op == "device-set")
     assert set_change.values == {"readonly": "true"}
+
+
+def test_renamed_mount_releases_its_target_before_the_add(spec: MachineSpec) -> None:
+    spec = replace(spec, mounts=(MountSpec("code", "/src", "/workspace"),))
+    current = state(devices={"nixant-mount-workspace": MOUNT})
+    assert [(c.op, c.key) for c in plan(spec, current)] == [
+        ("device-remove", "nixant-mount-workspace"),
+        ("device-add", "nixant-mount-code"),
+    ]
+
+
+def test_retarget_onto_an_obsolete_target_removes_it_first(spec: MachineSpec) -> None:
+    spec = replace(spec, mounts=(MountSpec("workspace", "/src", "/data"),))
+    current = state(
+        devices={
+            "nixant-mount-workspace": MOUNT,
+            "nixant-mount-data": {"type": "disk", **mount_device("/d", "/data", False)},
+        }
+    )
+    assert [(c.op, c.key) for c in plan(spec, current)] == [
+        ("device-remove", "nixant-mount-data"),
+        ("device-set", "nixant-mount-workspace"),
+    ]
+
+
+def test_swapped_targets_are_removed_and_re_added(spec: MachineSpec) -> None:
+    spec = replace(
+        spec,
+        mounts=(MountSpec("a", "/a", "/y"), MountSpec("b", "/b", "/x")),
+    )
+    current = state(
+        devices={
+            "nixant-mount-a": {"type": "disk", **mount_device("/a", "/x", False)},
+            "nixant-mount-b": {"type": "disk", **mount_device("/b", "/y", False)},
+        }
+    )
+    changes = plan(spec, current)
+    assert [(c.op, c.key) for c in changes] == [
+        ("device-remove", "nixant-mount-a"),
+        ("device-remove", "nixant-mount-b"),
+        ("device-add", "nixant-mount-a"),
+        ("device-add", "nixant-mount-b"),
+    ]
+    assert changes[2].values["path"] == "/y"
+    assert changes[2].values["source"] == "/a"
 
 
 def test_vm_mounts_limits_are_live(spec: MachineSpec) -> None:

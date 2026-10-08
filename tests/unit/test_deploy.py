@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from nixant.cli import app, parse_duration
-from nixant.errors import NixantError, UsageError
+from nixant.errors import CommandError, NixantError, UsageError
 from nixant.models import MachineSpec, MachineState
 from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
@@ -198,6 +198,9 @@ def test_invalid_duration(value: str) -> None:
         parse_duration(value)
 
 
+UNRELATED = {"type": "disk", "source": "/other", "path": "/other"}
+
+
 @pytest.fixture
 def running_deploy(
     deploy: dict[str, Mock], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -221,10 +224,16 @@ def running_deploy(
                 "shift": "true",
                 "readonly": "false",
             },
-            "unrelated": {"type": "disk", "source": "/other", "path": "/other"},
+            "unrelated": dict(UNRELATED),
         },
     }
     runner = Mock(spec=Runner)
+
+    def claim_path(device: str, path: str | None) -> None:
+        # Incus refuses two disk devices mounted at the same guest path.
+        for other, existing in data["devices"].items():
+            if other != device and path and existing.get("path") == path:
+                raise CommandError(["incus"], 1, b"path is already in use")
 
     def run(argv, **kwargs):
         stdout = b""
@@ -235,16 +244,27 @@ def running_deploy(
         elif argv[:4] == ["incus", "config", "device", "remove"]:
             del data["devices"][argv[5]]
         elif argv[:4] == ["incus", "config", "device", "add"]:
-            data["devices"][argv[5]] = {
-                "type": argv[6],
-                **dict(item.split("=", 1) for item in argv[7:]),
-            }
+            if argv[5] in data["devices"]:
+                raise CommandError(["incus"], 1, b"device already exists")
+            device = {"type": argv[6], **dict(i.split("=", 1) for i in argv[7:])}
+            claim_path(argv[5], device.get("path"))
+            data["devices"][argv[5]] = device
+        elif argv[:4] == ["incus", "config", "device", "set"]:
+            values = dict(item.split("=", 1) for item in argv[6:])
+            claim_path(argv[5], values.get("path"))
+            data["devices"][argv[5]].update(values)
+        elif argv[:2] == ["incus", "start"]:
+            data["status"] = "Running"
         elif argv[:3] == ["incus", "exec", "-T"]:
             command = argv[argv.index("--") + 1 :]
             if command == ["readlink", "-f", "/run/current-system"]:
                 stdout = b"system\n"
             elif command == ["cat", "/proc/mounts"]:
-                stdout = b"source /workspace none rw 0 0\n"
+                stdout = "".join(
+                    f"source {device['path']} none rw 0 0\n"
+                    for device in data["devices"].values()
+                    if device.get("path")
+                ).encode()
             else:
                 raise RuntimeError(f"unexpected guest command: {argv}")
         else:
@@ -253,7 +273,8 @@ def running_deploy(
 
     runner.run.side_effect = run
     provider = IncusProvider(runner)
-    deploy["resolve"].return_value = provider.inspect("test-dev")
+    # Resolve reads the fake's current state, so tests may adjust it first.
+    deploy["resolve"].side_effect = lambda *args, **kwargs: provider.inspect("test-dev")
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda runner: provider)
     monkeypatch.setattr("nixant.cli.can_skip", can_skip)
     return data
@@ -286,16 +307,14 @@ def test_up_removes_obsolete_mount_without_touching_unrelated_devices(
         raise result.exception
     assert result.exit_code == 0, result.output
     assert "nixant-mount-workspace" not in running_deploy["devices"]
-    assert running_deploy["devices"]["unrelated"] == {
-        "type": "disk",
-        "source": "/other",
-        "path": "/other",
-    }
+    assert running_deploy["devices"]["unrelated"] == UNRELATED
 
 
-def test_up_replaces_renamed_mount(
-    deploy: dict[str, Mock], running_deploy: dict
+@pytest.mark.parametrize("status", ["Running", "Stopped"])
+def test_up_replaces_renamed_mount_at_the_same_target(
+    deploy: dict[str, Mock], running_deploy: dict, status: str
 ) -> None:
+    running_deploy["status"] = status
     original = deploy["evaluate"].return_value
     renamed = replace(original.spec.mounts[0], name="code")
     deploy["evaluate"].return_value = replace(
@@ -303,8 +322,35 @@ def test_up_replaces_renamed_mount(
     )
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 0, result.output
-    assert "nixant-mount-workspace" not in running_deploy["devices"]
-    assert "unrelated" in running_deploy["devices"]
+    managed = {k for k in running_deploy["devices"] if k.startswith("nixant-")}
+    assert managed == {"nixant-mount-code"}
+    assert running_deploy["devices"]["nixant-mount-code"]["path"] == "/workspace"
+    assert running_deploy["devices"]["unrelated"] == UNRELATED
+
+
+@pytest.mark.parametrize("status", ["Running", "Stopped"])
+def test_up_reuses_an_obsolete_mount_target(
+    deploy: dict[str, Mock], running_deploy: dict, tmp_path: Path, status: str
+) -> None:
+    running_deploy["status"] = status
+    running_deploy["devices"]["nixant-mount-data"] = {
+        "type": "disk",
+        "source": str(tmp_path),
+        "path": "/data",
+        "shift": "true",
+        "readonly": "false",
+    }
+    original = deploy["evaluate"].return_value
+    moved = replace(original.spec.mounts[0], target="/data")
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, mounts=(moved,), workdir="/data")
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    managed = {k for k in running_deploy["devices"] if k.startswith("nixant-")}
+    assert managed == {"nixant-mount-workspace"}
+    assert running_deploy["devices"]["nixant-mount-workspace"]["path"] == "/data"
+    assert running_deploy["devices"]["unrelated"] == UNRELATED
 
 
 def test_up_uses_git_override_name(
