@@ -158,4 +158,4 @@ $ NIXANT_INTEGRATION=1 pytest tests/integration          # everything, including
 $ NIXANT_INTEGRATION=1 pytest tests/integration -k "not vm"
 ```
 
-They create instances named `nixit-*` and delete them afterwards. `test_init_lock.py` builds the package and locks generated projects without creating instances. `NIXANT_IT_NIXPKGS` (for example `github:NixOS/nixpkgs/nixos-26.05`) runs the scenarios against another guest nixpkgs.
+They create instances named `nixit-*` and delete them afterwards. `test_nix_eval.py` (the CLI's evaluation expression against `examples/basic` and a minimal flake) and `test_init_lock.py` (the packaged `init` lock) need only Nix and create no instances. `NIXANT_IT_NIXPKGS` (for example `github:NixOS/nixpkgs/nixos-26.05`) runs the scenarios against another guest nixpkgs.
