@@ -68,7 +68,7 @@ Other NixOS modules can build on nixant, for example a module that sets up a web
 
 - `nixosModules.container` and `nixosModules.vm` are what a project imports; each pulls in the options and creates the guest user.
 - `nixosModules.options` declares only the `nixant.*` options and their rules, without the guest user, boot or Incus settings. Use it to evaluate or test an extension module without an Incus guest; the test then has to define the `users.users` entry for `nixant.user.name` itself.
-- `nixosModules.devenv` adds [devenv](https://devenv.sh) and git to the guest and configures the devenv binary cache in the guest's Nix daemon, so it also applies under `isolation = "agent"`, where the user is not a trusted Nix user. Import it next to `nixosModules.container`. devenv then builds each project's environment inside the guest, with its own `devenv.lock`; nixant does not start devenv processes.
+- `nixosModules.devenv` adds [devenv](https://devenv.sh) and git to the guest and configures the devenv binary cache in the guest's Nix daemon, so it also applies under `isolation = "agent"`, where the user is not a trusted Nix user. Import it next to `nixosModules.container`. devenv then builds each project's environment inside the guest, with its own `devenv.lock`; nixant does not start devenv processes. `nixant init devenv` starts a project with it, and [`examples/devenv-wordpress`](examples/devenv-wordpress/README.md) runs a WordPress stack this way.
 
 Extension modules may read these options. The container and VM modules set `nixant.enable = true`; with the options module alone, set it yourself, otherwise the workspace mount default does not exist:
 
@@ -192,7 +192,7 @@ $ ruff check . && ruff format --check . && mypy && pytest
 $ nix flake check
 ```
 
-`nix flake check` evaluates every template and `examples/basic` through their own `flake.nix` down to the system derivation. The example is evaluated with the inputs from its committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh it with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` in `examples/basic`.
+`nix flake check` evaluates every template, `examples/basic` and `examples/devenv-wordpress` through their own `flake.nix` down to the system derivation. The examples are evaluated with the inputs from their committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh them with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` in each example directory. The devenv side of `examples/devenv-wordpress` (`devenv.nix`) is not checked; it is built in the guest.
 
 Integration tests need a disposable Incus environment. Plain `pytest` only collects `tests/unit`, so name the directory and opt in explicitly:
 
