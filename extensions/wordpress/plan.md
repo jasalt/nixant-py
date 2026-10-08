@@ -78,7 +78,7 @@ nixant-wp/
 | Option | Type | Default | Notes |
 |---|---|---|---|
 | `enable` | bool | `false` | |
-| `package` | package | `pkgs.wordpress` (see open questions) | Core source; nixpkgs' package lacks bundled themes. |
+| `package` | package | unpacked `pkgs.wordpress.src` | Core source; nixpkgs' `wordpress` package lacks the bundled themes. |
 | `phpPackage` | package | `pkgs.php` with `mysqli pdo_mysql gd zip exif intl` (+ `imagick` if cheap) | |
 | `title` | str | `"WordPress"` | Used at first install only. |
 | `url` | nullOr str | derived | `http://localhost:<port>` from `nixant.ports` (guest 80); assertion if neither set nor derivable. |
@@ -87,6 +87,7 @@ nixant-wp/
 | `themes` | attrsOf submodule | `{}` | `path` (str, relative to workspace). |
 | `activeTheme` | nullOr str | `null` | Installed from wordpress.org if not linked or bundled. |
 | `wpConfig` | attrsOf (oneOf [bool int str]) | `{ WP_DEBUG = true; WP_DEBUG_LOG = true; WP_DEBUG_DISPLAY = false; }` | Applied with `wp config set` on every setup (VVV's `wpconfig_constants`). |
+| `mailFrom` | str | `wordpress@example.test` | Sender address; WordPress's default `wordpress@localhost` is rejected. |
 | `mailpit.uiPort` / `mailpit.smtpPort` | port | `8025` / `1025` | Guest ports. |
 
 Assertions: nixant module imported; slugs match `[A-Za-z0-9_-]+`; paths are relative and do not contain `..`; `url` is an `http://` URL; `activeTheme` is a valid slug.
@@ -154,9 +155,9 @@ $ nixant down / nixant destroy
 
 ## Open questions
 
-- WordPress core (M1): nixpkgs' `wordpress` is the upstream tarball with the bundled plugins and themes removed, so a fresh install has no theme. Either copy core from the unpacked `pkgs.wordpress.src` (plain upstream, still a host-built fixed-output fetch) or keep `pkgs.wordpress` and link a default theme from `pkgs.wordpressPackages.themes`.
+None for the MVP.
 
-Resolved: PHP default (Decision 12), uploads (Decision 13), agent access (Decision 14). Caddy's `:80` site already listens on every interface, so the bridge address needs no Caddy change if `.test` hostnames come later.
+Resolved: core source (the default `wordpress.package` is the unpacked `pkgs.wordpress.src` tarball, which keeps the bundled themes; the setup unit seeds `wp-content` once and only adds missing bundled themes and plugins on later core changes), PHP default (Decision 12), uploads (Decision 13), agent access (Decision 14, implemented in nixant). Found while implementing: WordPress's default sender `wordpress@localhost` is rejected by PHPMailer, so the module ships `wordpress.mailFrom` and a managed must-use plugin; opcache must revalidate on every request for host edits to be live; the `wpConfig` debug defaults are set per key so user constants merge with them. Caddy's `:80` site already listens on every interface, so the bridge address needs no Caddy change if `.test` hostnames come later.
 
 ## Risks
 
