@@ -193,6 +193,7 @@ def test_mount_retry(
     provider: IncusProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("nixant.providers.incus.time.sleep", lambda _: None)
+    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
     provider.inspect = Mock(
         return_value=MachineState("dev", "Running", "container", {}, {})
     )
@@ -225,6 +226,7 @@ def test_mount_retry_bounded(
     provider: IncusProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("nixant.providers.incus.time.sleep", lambda _: None)
+    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
     provider.inspect = Mock(
         return_value=MachineState("dev", "Running", "container", {}, {})
     )
@@ -234,6 +236,33 @@ def test_mount_retry_bounded(
             "dev", MountSpec("workspace", str(tmp_path), "/workspace"), verify=True
         )
     assert provider.run.call_count == 3
+
+
+def test_mount_verification_waits_for_a_late_mount(
+    provider: IncusProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("nixant.providers.incus.time.sleep", sleeps.append)
+    device = {
+        "type": "disk",
+        "source": str(tmp_path),
+        "path": "/workspace",
+        "shift": "true",
+        "readonly": "false",
+    }
+    provider.inspect = Mock(
+        return_value=MachineState(
+            "dev", "Running", "vm", {}, {"nixant-mount-workspace": device}
+        )
+    )
+    absent = subprocess.CompletedProcess([], 0, b"")
+    present = subprocess.CompletedProcess([], 0, b"src /workspace virtiofs rw 0 0\n")
+    provider.run = Mock(side_effect=[absent, absent, absent, present])
+    provider.ensure_mount(
+        "dev", MountSpec("workspace", str(tmp_path), "/workspace"), verify=True
+    )
+    provider.runner.run.assert_not_called()  # waited instead of re-adding
+    assert sleeps == [0.5, 0.5, 0.5]
 
 
 def test_shift_failure_never_retries_unshifted(

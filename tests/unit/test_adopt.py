@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -7,7 +8,7 @@ from typer.testing import CliRunner
 from nixant.adopt import adopt, candidates, choose, remap_source
 from nixant.cli import app
 from nixant.errors import CommandError, NixantError
-from nixant.models import SCHEMA_VERSION, MachineState
+from nixant.models import SCHEMA_VERSION, MachineState, MountSpec
 from nixant.ownership import PREFIX
 from nixant.project import project_id
 
@@ -192,6 +193,45 @@ def test_adopt_rewrites_metadata_mounts_and_gcroot(moved: dict) -> None:
         moved["store"] / "other",
     }
     assert (gcroots / "unrelated-dev").resolve() == moved["store"] / "other"
+
+
+@pytest.mark.parametrize("status", ["Running", "Stopped"])
+def test_adopt_waits_for_moved_mounts_on_a_running_instance(
+    moved: dict, status: str
+) -> None:
+    old, new = moved["old"], moved["new"]
+    state = replace(
+        instance(
+            "lost",
+            old,
+            devices={
+                "nixant-mount-workspace": {
+                    "type": "disk",
+                    "source": str(old),
+                    "path": "/workspace",
+                },
+                "nixant-mount-data": {
+                    "type": "disk",
+                    "source": "/srv/data",
+                    "path": "/data",
+                    "readonly": "true",
+                },
+            },
+        ),
+        status=status,
+    )
+    provider = Mock()
+    adopt(provider, moved["runner"], new, "dev", state)
+    calls = provider.ensure_mount.call_args_list
+    if status == "Stopped":
+        assert calls == []
+        return
+    assert len(calls) == 1
+    assert calls[0].args == (
+        "lost",
+        MountSpec("workspace", str(new), "/workspace", False),
+    )
+    assert calls[0].kwargs == {"verify": True}
 
 
 def test_adopt_keeps_the_old_root_when_registration_fails(moved: dict) -> None:

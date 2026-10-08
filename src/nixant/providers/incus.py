@@ -14,6 +14,9 @@ from nixant.models import MachineSpec, MachineState, MountSpec, Snapshot
 from nixant.planner import MOUNT_PREFIX, PORT_PREFIX, Change
 from nixant.run import Runner
 
+# Polls of /proc/mounts, 0.5s apart, before a missing mount is re-added.
+MOUNT_POLLS = 20
+
 
 def _local(name: str) -> str:
     if not name or any(char in name for char in "/:\0\n"):
@@ -316,13 +319,7 @@ class IncusProvider:
         if not verify:
             return
         for attempt in range(3):
-            result = self.run(name, ["cat", "/proc/mounts"], capture=True)
-            paths = [
-                re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), line.split()[1])
-                for line in result.stdout.decode().splitlines()
-                if len(line.split()) >= 2
-            ]
-            if mount.target in paths:
+            if self._mounted(name, mount.target):
                 return
             if attempt < 2:
                 self.runner.run(
@@ -340,10 +337,24 @@ class IncusProvider:
                         *args,
                     ]
                 )
-                time.sleep(0.2)
         raise NixantError(
             f"mount {mount.name} did not appear at {mount.target} in {name}"
         )
+
+    def _mounted(self, name: str, target: str) -> bool:
+        """Wait for target to be mounted; a VM re-plugs virtiofs asynchronously."""
+        for poll in range(MOUNT_POLLS):
+            result = self.run(name, ["cat", "/proc/mounts"], capture=True)
+            paths = [
+                re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), line.split()[1])
+                for line in result.stdout.decode().splitlines()
+                if len(line.split()) >= 2
+            ]
+            if target in paths:
+                return True
+            if poll < MOUNT_POLLS - 1:
+                time.sleep(0.5)
+        return False
 
     def exec_argv(
         self, name: str, argv: list[str], *, user: str, cwd: str

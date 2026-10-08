@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from nixant.errors import NixantError
-from nixant.models import MachineState
+from nixant.models import MachineState, MountSpec
 from nixant.nix.build import gcroot_path
 from nixant.ownership import PREFIX, check_schema
 from nixant.planner import MOUNT_PREFIX, Change, Effect
@@ -113,6 +113,20 @@ def adopt(
     # Protect the closure under the new name before changing anything else.
     retired = _register_gcroot(old_id, root, target, runner)
     rebase_mounts(provider, state.name, state.devices, old_root, root)
+    if state.status == "Running":
+        # A running VM drops a retargeted mount until virtiofs is re-plugged.
+        for device, source in mount_moves(state.devices, old_root, root).items():
+            settings = state.devices[device]
+            provider.ensure_mount(
+                state.name,
+                MountSpec(
+                    device.removeprefix(MOUNT_PREFIX),
+                    source,
+                    settings.get("path", ""),
+                    settings.get("readonly") == "true",
+                ),
+                verify=True,
+            )
     provider.set_metadata(
         state.name,
         {PREFIX + "project": project_id(root), PREFIX + "root": str(root)},
