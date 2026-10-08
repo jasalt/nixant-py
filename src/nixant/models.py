@@ -52,6 +52,24 @@ class Snapshot:
     name: str
     created_at: str = ""
     stateful: bool = False
+    # The instance config and local devices that a restore brings back.
+    config: Mapping[str, str] = field(default_factory=dict, compare=False)
+    devices: Mapping[str, Mapping[str, str]] = field(
+        default_factory=dict, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "config", MappingProxyType(dict(self.config)))
+        object.__setattr__(
+            self,
+            "devices",
+            MappingProxyType(
+                {
+                    name: MappingProxyType(dict(device))
+                    for name, device in self.devices.items()
+                }
+            ),
+        )
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 """Re-home an instance whose checkout moved, without evaluating anything."""
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from nixant.errors import NixantError
@@ -68,6 +69,41 @@ def remap_source(source: str, old_root: str, new_root: Path) -> str:
     return source
 
 
+def mount_moves(
+    devices: Mapping[str, Mapping[str, str]], old_root: str, new_root: Path
+) -> dict[str, str]:
+    """Managed mount devices whose source lies in the old checkout, rebased."""
+    moves = {}
+    for device, settings in sorted(devices.items()):
+        if not device.startswith(MOUNT_PREFIX):
+            continue
+        new_source = remap_source(settings.get("source", ""), old_root, new_root)
+        if new_source != settings.get("source"):
+            moves[device] = new_source
+    return moves
+
+
+def rebase_mounts(
+    provider: Provider,
+    name: str,
+    devices: Mapping[str, Mapping[str, str]],
+    old_root: str,
+    new_root: Path,
+) -> None:
+    for device, new_source in mount_moves(devices, old_root, new_root).items():
+        provider.apply(
+            name,
+            Change(
+                "mounts",
+                Effect.LIVE,
+                f"point {device} at {new_source}",
+                "device-set",
+                device,
+                {"source": new_source},
+            ),
+        )
+
+
 def adopt(
     provider: Provider, runner: Runner, root: Path, target: str, state: MachineState
 ) -> None:
@@ -76,22 +112,7 @@ def adopt(
     old_id = state.config.get(PREFIX + "project", "")
     # Protect the closure under the new name before changing anything else.
     retired = _register_gcroot(old_id, root, target, runner)
-    for device, settings in sorted(state.devices.items()):
-        if not device.startswith(MOUNT_PREFIX):
-            continue
-        new_source = remap_source(settings.get("source", ""), old_root, root)
-        if new_source != settings.get("source"):
-            provider.apply(
-                state.name,
-                Change(
-                    "mounts",
-                    Effect.LIVE,
-                    f"point {device} at {new_source}",
-                    "device-set",
-                    device,
-                    {"source": new_source},
-                ),
-            )
+    rebase_mounts(provider, state.name, state.devices, old_root, root)
     provider.set_metadata(
         state.name,
         {PREFIX + "project": project_id(root), PREFIX + "root": str(root)},

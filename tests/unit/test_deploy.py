@@ -1,14 +1,14 @@
 import json
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from fake_incus import FakeIncus
 from typer.testing import CliRunner
 
 from nixant.cli import app, parse_duration
-from nixant.errors import CommandError, NixantError, UsageError
+from nixant.errors import NixantError, UsageError
 from nixant.models import MachineSpec, MachineState, PortSpec
 from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
@@ -227,100 +227,7 @@ def test_invalid_duration(value: str) -> None:
         parse_duration(value)
 
 
-UNRELATED = {"type": "disk", "source": "/other", "path": "/other"}
-
-
-class FakeIncus:
-    """An in-memory Incus that enforces the rules nixant must work within."""
-
-    def __init__(self, data: dict | None, profile_root: dict) -> None:
-        self.data = data
-        self.profile_root = profile_root
-        self.calls: list[list[str]] = []
-        self.fail: dict[str, bytes] = {}
-
-    def response(self) -> dict:
-        assert self.data is not None
-        root = {**self.profile_root, **self.data["devices"].get("root", {})}
-        return {**self.data, "expanded_devices": {**self.data["devices"], "root": root}}
-
-    def claim_path(self, device: str, path: str | None) -> None:
-        # Incus refuses two disk devices mounted at the same guest path.
-        assert self.data is not None
-        for other, existing in self.data["devices"].items():
-            if other != device and path and existing.get("path") == path:
-                raise CommandError(["incus"], 1, b"path is already in use")
-
-    def create(self, argv: list[str]) -> None:
-        options = list(zip(argv, argv[1:], strict=False))
-        devices = {}
-        for flag, value in options:
-            if flag == "-d":
-                device, *items = value.split(",")
-                devices[device] = dict(item.split("=", 1) for item in items)
-        self.data = {
-            "name": argv[3].removeprefix("local:"),
-            "status": "Stopped",
-            "type": "virtual-machine" if "--vm" in argv else "container",
-            "ephemeral": "--ephemeral" in argv,
-            "config": dict(v.split("=", 1) for f, v in options if f == "-c"),
-            "devices": devices,
-        }
-
-    def run(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-        self.calls.append(argv)
-        for prefix, stderr in self.fail.items():
-            if " ".join(argv).startswith(prefix):
-                raise CommandError(argv, 1, stderr)
-        stdout = b""
-        if argv[:2] == ["incus", "create"]:
-            self.create(argv)
-        elif argv[:3] == ["incus", "query", "local:/1.0/profiles/default"]:
-            stdout = json.dumps({"devices": {"root": self.profile_root}}).encode()
-        elif argv[:3] == ["incus", "query", "local:/1.0/storage-pools/default"]:
-            stdout = json.dumps({"driver": "btrfs"}).encode()
-        elif argv[:2] == ["incus", "query"]:
-            if self.data is None:
-                return subprocess.CompletedProcess(
-                    argv, 1, b"", b"Error: Instance not found"
-                )
-            stdout = json.dumps(self.response()).encode()
-        elif self.data is None:
-            raise RuntimeError(f"no instance for {argv}")
-        elif argv[:3] == ["incus", "config", "set"]:
-            self.data["config"].update(item.split("=", 1) for item in argv[4:])
-        elif argv[:4] == ["incus", "config", "device", "remove"]:
-            del self.data["devices"][argv[5]]
-        elif argv[:4] == ["incus", "config", "device", "add"]:
-            if argv[5] in self.data["devices"]:
-                raise CommandError(argv, 1, b"device already exists")
-            device = {"type": argv[6], **dict(i.split("=", 1) for i in argv[7:])}
-            self.claim_path(argv[5], device.get("path"))
-            self.data["devices"][argv[5]] = device
-        elif argv[:4] == ["incus", "config", "device", "set"]:
-            values = dict(item.split("=", 1) for item in argv[6:])
-            self.claim_path(argv[5], values.get("path"))
-            self.data["devices"][argv[5]].update(values)
-        elif argv[:4] == ["incus", "config", "device", "override"]:
-            root = self.data["devices"].setdefault("root", {})
-            root.update(item.split("=", 1) for item in argv[6:])
-        elif argv[:2] == ["incus", "start"]:
-            self.data["status"] = "Running"
-        elif argv[:3] == ["incus", "exec", "-T"]:
-            command = argv[argv.index("--") + 1 :]
-            if command == ["readlink", "-f", "/run/current-system"]:
-                stdout = b"system\n"
-            elif command == ["cat", "/proc/mounts"]:
-                stdout = "".join(
-                    f"source {device['path']} none rw 0 0\n"
-                    for device in self.data["devices"].values()
-                    if device.get("path")
-                ).encode()
-            else:
-                raise RuntimeError(f"unexpected guest command: {argv}")
-        else:
-            raise RuntimeError(f"unexpected Incus command: {argv}")
-        return subprocess.CompletedProcess(argv, 0, stdout, b"")
+UNRELATED = {"type": "disk", "source": "/", "path": "/other"}
 
 
 def install_fake(

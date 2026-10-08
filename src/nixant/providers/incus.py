@@ -264,12 +264,14 @@ class IncusProvider:
                         name=str(item["name"]),
                         created_at=str(item.get("created_at", "")),
                         stateful=bool(item.get("stateful", False)),
+                        config=item.get("config") or {},
+                        devices=item.get("devices") or {},
                     )
                     for item in data
                 ),
                 key=lambda snap: (snap.created_at, snap.name),
             )
-        except (KeyError, TypeError, AttributeError) as exc:
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise NixantError(f"invalid Incus snapshot response: {exc}") from exc
 
     def snapshot_delete(self, name: str, snapshot: str) -> None:

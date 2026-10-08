@@ -4,11 +4,13 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from fake_incus import FakeIncus
 from typer.testing import CliRunner
 
+from nixant.adopt import adopt
 from nixant.cli import app
 from nixant.errors import NixantError, UsageError
-from nixant.models import MachineState, Snapshot
+from nixant.models import SCHEMA_VERSION, MachineState, Snapshot
 from nixant.ownership import PREFIX
 from nixant.project import project_id
 from nixant.providers.incus import IncusProvider
@@ -54,6 +56,88 @@ def test_restore_unknown_snapshot_changes_nothing(tmp_path: Path) -> None:
         restore(provider, STATE, "nope", tmp_path)
     provider.snapshot_restore.assert_not_called()
     provider.set_metadata.assert_not_called()
+
+
+@pytest.fixture
+def moved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    """An instance snapshotted, then its checkout moved and adopted."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    old, new = tmp_path / "old", tmp_path / "new"
+    (old / "pkg").mkdir(parents=True)
+    fake = FakeIncus(
+        {
+            "name": "shop-dev",
+            "status": "Running",
+            "type": "container",
+            "config": {
+                PREFIX + "managed": "true",
+                PREFIX + "project": project_id(old),
+                PREFIX + "root": str(old),
+                PREFIX + "target": "dev",
+                PREFIX + "schema": str(SCHEMA_VERSION),
+            },
+            "devices": {
+                "nixant-mount-workspace": {
+                    "type": "disk",
+                    "source": str(old),
+                    "path": "/workspace",
+                },
+                "nixant-mount-pkg": {
+                    "type": "disk",
+                    "source": str(old / "pkg"),
+                    "path": "/pkg",
+                },
+                "nixant-mount-host": {"type": "disk", "source": "/", "path": "/host"},
+            },
+        },
+        {"type": "disk"},
+    )
+    runner = Mock(spec=Runner)
+    runner.run.side_effect = fake.run
+    provider = IncusProvider(runner)
+    provider.snapshot_create("shop-dev", "before-move")
+    old.rename(new)
+    state = provider.inspect("shop-dev")
+    assert state is not None
+    adopt(provider, Mock(spec=Runner), new, "dev", state)
+    return {"fake": fake, "provider": provider, "old": old, "new": new}
+
+
+@pytest.mark.parametrize("status", ["Running", "Stopped"])
+def test_restore_after_adopt_keeps_mounts_in_the_new_checkout(
+    moved: dict, status: str
+) -> None:
+    fake, provider, new = moved["fake"], moved["provider"], moved["new"]
+    fake.data["status"] = status
+    state = provider.inspect("shop-dev")
+    restore(provider, state, "before-move", new)
+    assert fake.data["status"] == status
+    sources = {k: v["source"] for k, v in fake.data["devices"].items()}
+    assert sources == {
+        "nixant-mount-workspace": str(new),
+        "nixant-mount-pkg": str(new / "pkg"),
+        "nixant-mount-host": "/",
+    }
+    assert fake.data["config"][PREFIX + "root"] == str(new)
+    assert fake.data["config"][PREFIX + "project"] == project_id(new)
+
+
+def test_restore_without_moved_mounts_does_not_stop_first(moved: dict) -> None:
+    fake, provider, new = moved["fake"], moved["provider"], moved["new"]
+    provider.snapshot_create("shop-dev", "after-move")
+    fake.calls.clear()
+    restore(provider, provider.inspect("shop-dev"), "after-move", new)
+    assert ["incus", "stop", "local:shop-dev", "--timeout", "60"] not in fake.calls
+    assert fake.data["status"] == "Running"
+
+
+def test_restore_refuses_to_stop_a_running_ephemeral_instance(moved: dict) -> None:
+    fake, provider = moved["fake"], moved["provider"]
+    fake.data["ephemeral"] = True
+    with pytest.raises(NixantError, match="would delete it"):
+        restore(provider, provider.inspect("shop-dev"), "before-move", moved["new"])
+    assert fake.data is not None and fake.data["status"] == "Running"
+    assert fake.data["devices"]["nixant-mount-workspace"]["source"] == str(moved["new"])
 
 
 @pytest.fixture
