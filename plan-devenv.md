@@ -98,8 +98,8 @@ without `isolation = "agent"`, and that `trusted-users` stays without the user u
 flake.nix        # like default, modules = [ container devenv ./nix/dev.nix ]
 nix/dev.nix      # stateVersion, extra packages
 devenv.nix       # minimal: packages = [ pkgs.git ]; enterShell hint
-devenv.yaml      # nixpkgs input only
-.gitignore       # .devenv/ .devenv.flake.nix devenv.local.nix
+devenv.yaml      # devenv-nixpkgs/rolling (devenv's default), strict_ports: true
+.gitignore       # .devenv* devenv.local.nix devenv.local.yaml
 ```
 
 `devenv.lock` is not shipped; it is created in the guest on first `devenv shell`/`up` and should be
@@ -120,7 +120,7 @@ nix/dev.nix
 ports.nix        # { http = 8090; mailpit = 8026; } plain data, imported by flake.nix and devenv.nix
 devenv.nix       # php-fpm, mariadb, caddy, mailpit, wp-cli, one setup task
 devenv.yaml
-.gitignore       # .devenv/ .devenv.flake.nix devenv.local.nix wordpress/
+.gitignore       # .devenv* devenv.local.{nix,yaml} /wordpress/
 README.md
 wordpress/       # mutable WP root, created on first setup (not committed)
 ```
@@ -140,12 +140,16 @@ proxy pointing at nothing).
 - `services.caddy`: `http://:${ports.http}` with `root * ${config.devenv.root}/wordpress`,
   `php_fastcgi` to the fpm socket, `file_server`.
 - `services.mailpit`: UI on `ports.mailpit`; PHP `sendmail_path` to mailpit.
-- `packages = [ pkgs.wp-cli ]`.
+- `wp`: the `pkgs.wp-cli` phar run with `config.languages.php.package`. The packaged wrapper
+  passes its own php.ini (`-c`), which drops `sendmail_path`, so CLI mail would not reach Mailpit.
 - `tasks."wordpress:setup"` (idempotent, never destructive):
-  1. `wp core download --path=wordpress --version=<pinned>` only if `wordpress/wp-load.php` is missing.
-     Never `--force`.
+  1. `wp core download --path=wordpress` (latest; WordPress updates itself afterwards) only if
+     `wordpress/wp-load.php` is missing. Never `--force`.
   2. `wp config create` only if `wordpress/wp-config.php` is missing. `DB_HOST=127.0.0.1:3306`.
-  3. `wp core install` only if `wp core is-installed` fails.
+  3. `wp-content/mu-plugins/devenv-mail-from.php` only if missing: WordPress sends from
+     `wordpress@localhost`, which PHPMailer rejects; the plugin sets `wordpress@example.test`.
+  4. Wait for MariaDB (`mariadb -e 'SELECT 1'`, 60 s), then `wp core install` only if
+     `wp core is-installed` fails.
 
 After setup, `wordpress/` belongs to the user: edited from the host IDE, changed by WP itself
 (updates, plugins, uploads) inside the guest. The example does not converge plugins or themes.
@@ -175,7 +179,8 @@ Use `nixant exec --target <t> -- …` for other targets.
   data dir. Running devenv on the host in the same directory conflicts. Editing files from the
   host is fine.
 - **wp-config.php contains guest-side values** (`127.0.0.1:3306`, absolute `/workspace/...` paths
-  if any). Host-side `wp` commands are unsupported; run `wp` through `nixant exec`.
+  if any). Host-side `wp` commands are unsupported; run
+  `nixant exec -- devenv shell -- wp --path=wordpress ...`.
 
 ## Runtime semantics to document
 
