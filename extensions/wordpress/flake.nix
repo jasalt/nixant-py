@@ -26,6 +26,12 @@
       packages.${system} = {
         inherit wp-site;
         default = wp-site;
+        # Boots a VM (needs KVM), so it is not part of `nix flake check`:
+        # nix build .#vm-test
+        vm-test = import ./tests/vm.nix {
+          inherit pkgs nixant;
+          wordpress = self.nixosModules.wordpress;
+        };
       };
 
       checks.${system} = {
