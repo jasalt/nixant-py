@@ -53,6 +53,17 @@ from nixant.run import Runner, check_host_tools
 class ErrorHandlingGroup(TyperGroup):
     """Translate expected failures at the command boundary only."""
 
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        # The group callback runs before the subcommand parses its own --help,
+        # so record here whether the subcommand's parser will show help.
+        name, command, rest = super().resolve_command(ctx, args)
+        ctx.meta["nixant.help"] = command is not None and _wants_help(
+            command, ctx, rest
+        )
+        return name, command, rest
+
     def invoke(self, ctx: click.Context) -> Any:
         try:
             return super().invoke(ctx)
@@ -75,6 +86,15 @@ app = typer.Typer(
 )
 
 
+def _wants_help(command: click.Command, ctx: click.Context, args: list[str]) -> bool:
+    """Whether args request help, honoring `--` and commands like exec."""
+    try:
+        options, _, _ = command.make_parser(ctx).parse_args(list(args))
+    except click.UsageError:
+        return False
+    return bool(options.get("help"))
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -83,7 +103,8 @@ def main(
     ),
 ) -> None:
     """Manage local NixOS development environments."""
-    check_host_tools()
+    if not ctx.meta.get("nixant.help"):
+        check_host_tools()
     ctx.ensure_object(dict)
     ctx.obj["runner"] = Runner(verbose=verbose)
 
