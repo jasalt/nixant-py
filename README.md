@@ -13,6 +13,7 @@ You describe an environment as a `nixosConfiguration` in your project's flake. n
 - Incus with the `local` remote and a default profile that provides a root disk and a NIC.
 - Your user is in the `incus-admin` group. Restricted `incus`-group projects are untested and unsupported.
 - The guest user's UID must equal your host UID, so the shifted workspace mount stays writable.
+- Incus must support idmapped mounts, which the shifted workspace mount (`shift=true`) needs. On GitHub-hosted Ubuntu 24.04 runners, Ubuntu's own Incus 6.0.0 refuses the mount (`idmapping abilities are required but aren't supported on system`) while upstream's [Zabbly packages](https://github.com/zabbly/incus) (Incus 7) work. [nixant-wp-demo's workflow](https://github.com/jasalt/nixant-wp-demo/blob/master/.github/workflows/static.yml) is a working GitHub Actions setup; it also removes the root-owned `~/.config/incus` that `sudo incus admin init` leaves there.
 
 nixant never changes Incus server configuration.
 
