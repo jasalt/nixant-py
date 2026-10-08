@@ -62,10 +62,12 @@ def nix_shim(directory: Path, head: str) -> Path:
 def init(package: Path, root: Path, shim: Path) -> subprocess.CompletedProcess[str]:
     root.mkdir()
     git(root, "init", "-q")
+    # The package wrapper must set NIXANT_*, and a dev shell's PYTHONPATH
+    # would make the packaged CLI import the working tree instead of itself.
     env = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith("NIXANT_")  # the package wrapper must set them
+        if not key.startswith(("NIXANT_", "PYTHON"))
     }
     env["PATH"] = f"{shim}:{env['PATH']}"
     return subprocess.run(
