@@ -36,6 +36,7 @@
       nixosModules.container = import ./nix/modules/container.nix;
       nixosModules.vm = import ./nix/modules/vm.nix;
       nixosModules.options = import ./nix/modules/options.nix;
+      nixosModules.devenv = import ./nix/modules/devenv.nix;
 
       templates = {
         default = {
@@ -66,6 +67,11 @@
         '';
         vm = pkgs.runCommand "nixant-vm-tests" {
           results = builtins.toJSON (import ./nix/tests/vm.nix { inherit nixpkgs system; });
+        } ''
+          echo "$results" > "$out"
+        '';
+        devenv = pkgs.runCommand "nixant-devenv-tests" {
+          results = builtins.toJSON (import ./nix/tests/devenv.nix { inherit nixpkgs system; });
         } ''
           echo "$results" > "$out"
         '';

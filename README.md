@@ -64,10 +64,11 @@ Everything else is ordinary NixOS and home-manager configuration, attached to `u
 
 ## Extension modules
 
-Other NixOS modules can build on nixant, for example a module that sets up a web stack and reads the project's user and forwarded ports. The flake exports three modules:
+Other NixOS modules can build on nixant, for example a module that sets up a web stack and reads the project's user and forwarded ports. The flake exports four modules:
 
 - `nixosModules.container` and `nixosModules.vm` are what a project imports; each pulls in the options and creates the guest user.
 - `nixosModules.options` declares only the `nixant.*` options and their rules, without the guest user, boot or Incus settings. Use it to evaluate or test an extension module without an Incus guest; the test then has to define the `users.users` entry for `nixant.user.name` itself.
+- `nixosModules.devenv` adds [devenv](https://devenv.sh) and git to the guest and configures the devenv binary cache in the guest's Nix daemon, so it also applies under `isolation = "agent"`, where the user is not a trusted Nix user. Import it next to `nixosModules.container`. devenv then builds each project's environment inside the guest, with its own `devenv.lock`; nixant does not start devenv processes.
 
 Extension modules may read these options. The container and VM modules set `nixant.enable = true`; with the options module alone, set it yourself, otherwise the workspace mount default does not exist:
 
