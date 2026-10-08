@@ -62,6 +62,25 @@ def test_happy_path(project: Project) -> None:
     assert not project.instance_exists()
 
 
+def test_up_leaves_a_calling_scripts_stdin_alone(project: Project) -> None:
+    project.nixant("up")
+    # Each up runs guest probes; none of them may consume the loop's input.
+    script = (
+        'while read -r line; do "$@" up >/dev/null 2>&1 || exit 1; echo "$line"; done'
+    )
+    result = subprocess.run(
+        ["bash", "-c", script, "loop", *nixant_argv()],
+        input="first\nsecond\nthird\n",
+        cwd=project.root,
+        env=nixant_env(),
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["first", "second", "third"]
+
+
 def test_stale_etc_nixos_guard(project: Project) -> None:
     project.nixant("up")
     stub = project.exec("cat", "/etc/nixos/configuration.nix").stdout

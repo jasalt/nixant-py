@@ -330,8 +330,11 @@ class IncusProvider:
             if cwd is not None:
                 args.extend(["--cwd", cwd])
             args.extend(["--", *argv])
-        # Programmatic execution must never allocate a pseudo-terminal (NAR data).
-        args.insert(2, "-T")
+        # Programmatic execution must never allocate a pseudo-terminal (NAR data),
+        # and must not read nixant's own stdin unless it is handed a stream:
+        # incus exec forwards stdin by default, which would swallow a calling
+        # script's input or keystrokes typed while up runs.
+        args[2:2] = ["-T"] if stdin is not None else ["-T", "-n"]
         return self.runner.run(
             args,
             stdin=stdin,

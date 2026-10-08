@@ -199,6 +199,16 @@ def test_exec_and_binary_run(provider: IncusProvider, tmp_path: Path) -> None:
         assert call.kwargs["timeout"] == 30
 
 
+@pytest.mark.parametrize("user", [None, "dev"])
+def test_run_without_input_never_reads_nixants_stdin(
+    provider: IncusProvider, user: str | None
+) -> None:
+    provider.run("dev", ["true"], user=user)
+    argv = provider.runner.run.call_args.args[0]
+    assert argv[:4] == ["incus", "exec", "-T", "-n"]
+    assert provider.runner.run.call_args.kwargs["stdin"] is None
+
+
 MOUNTS = b"source /workspace none rw 0 0\n"
 
 
