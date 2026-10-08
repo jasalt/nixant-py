@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
-from nixant.planner import Effect, mount_device, parse_size, plan
+from nixant.planner import Effect, mount_device, parse_size, plan, validate
 
 
 @pytest.fixture
@@ -230,6 +230,15 @@ def test_vm_ports_are_unsupported(spec: MachineSpec) -> None:
     changes = plan(spec, current)
     assert [(c.setting, c.effect) for c in changes] == [("ports", Effect.UNSUPPORTED)]
     assert "NAT" in changes[0].summary
+
+
+def test_validate_needs_no_instance(spec: MachineSpec) -> None:
+    assert validate(replace(spec, ports=(PortSpec(8080, 80),))) == []
+    assert validate(replace(spec, kind="vm")) == []
+    vm = replace(spec, kind="vm", ports=(PortSpec(8080, 80),))
+    assert [(c.setting, c.effect) for c in validate(vm)] == [
+        ("ports", Effect.UNSUPPORTED)
+    ]
 
 
 def test_kind_mismatch_is_recreate(spec: MachineSpec) -> None:

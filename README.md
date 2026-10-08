@@ -108,7 +108,7 @@ VM differences, verified on Incus with virtiofs mounts:
 
 - CPU and memory limits and mounts (add, retarget, remove) apply to a running VM.
 - A larger `disk` is stored immediately but the guest only sees it after `nixant restart`.
-- `ports` are rejected: Incus only allows NAT-mode proxies on VMs, which need a static IPv4 address on the instance NIC that nixant does not manage.
+- `ports` are rejected by `up` before anything is built or created: Incus only allows NAT-mode proxies on VMs, which need a static IPv4 address on the instance NIC that nixant does not manage.
 
 ## `exec` environment caveats
 

@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from nixant.cli import app, parse_duration
 from nixant.errors import CommandError, NixantError, UsageError
-from nixant.models import MachineSpec, MachineState
+from nixant.models import MachineSpec, MachineState, PortSpec
 from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
 from nixant.ownership import PREFIX
@@ -164,6 +164,35 @@ def test_disk_checks_quota_before_creating(deploy: dict[str, Mock]) -> None:
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 1
     deploy["provider"].create.assert_not_called()
+
+
+def test_vm_ports_are_refused_before_building_or_creating(
+    deploy: dict[str, Mock],
+) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original,
+        spec=replace(original.spec, kind="vm", ports=(PortSpec(8080, 80),)),
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 1
+    assert "ports are not supported on VMs" in result.output
+    deploy["build"].assert_not_called()
+    deploy["resolve"].assert_not_called()
+    assert deploy["provider"].mock_calls == []
+
+
+def test_rebuild_only_warns_about_vm_ports(deploy: dict[str, Mock]) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original,
+        spec=replace(original.spec, kind="vm", ports=(PortSpec(8080, 80),)),
+    )
+    deploy["resolve"].return_value = MachineState("test-dev", "Running", "vm", {}, {})
+    result = CliRunner().invoke(app, ["rebuild"])
+    assert result.exit_code == 0, result.output
+    assert "outer settings differ" in result.output
+    deploy["activate"].assert_called_once()
 
 
 def test_shrink_is_refused_on_existing_instance(deploy: dict[str, Mock]) -> None:

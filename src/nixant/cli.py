@@ -42,7 +42,7 @@ from nixant.ownership import (
     require_instance,
     resolve,
 )
-from nixant.planner import Change, Effect, plan
+from nixant.planner import Change, Effect, plan, validate
 from nixant.project import (
     discover_project,
     project_id,
@@ -114,15 +114,18 @@ def _apply(provider: IncusProvider, name: str, changes: list[Change]) -> None:
         provider.apply(name, change)
 
 
-def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) -> None:
-    """Store every change on the instance, or refuse the whole set up front."""
-    changes = plan(spec, state)
+def _refuse(changes: list[Change], reason: str) -> None:
     blocked = [c for c in changes if c.effect in (Effect.RECREATE, Effect.UNSUPPORTED)]
     if blocked:
         raise NixantError(
-            "cannot apply configuration to existing instance:\n"
-            + "\n".join(f"  {c.setting}: {c.summary}" for c in blocked)
+            f"{reason}:\n" + "\n".join(f"  {c.setting}: {c.summary}" for c in blocked)
         )
+
+
+def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) -> None:
+    """Store every change on the instance, or refuse the whole set up front."""
+    changes = plan(spec, state)
+    _refuse(changes, "cannot apply configuration to existing instance")
     if any(c.op == "root-size" for c in changes):
         provider.check_quota(state.expanded_devices.get("root", {}).get("pool"))
     # Restart-effect settings are stored now (Incus accepts them on a running
@@ -165,6 +168,9 @@ def _deploy(
                 replace(mount, source=str(sources[mount.name])) for mount in spec.mounts
             ),
         )
+        if not rebuild:
+            # Fail before building or creating anything the instance cannot take.
+            _refuse(validate(spec), "cannot apply configuration")
         assert evaluated.drv_path is not None
         system = build(root, target, evaluated.drv_path, runner)
         state = resolve(

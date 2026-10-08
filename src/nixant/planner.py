@@ -199,18 +199,25 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
             "path",
         )
     )
+    unsupported = validate(spec)
+    changes.extend(unsupported)
+    if not any(change.setting == "ports" for change in unsupported):
+        changes.extend(_ports(spec, state))
+    return changes
+
+
+def validate(spec: MachineSpec) -> list[Change]:
+    """Settings no instance can take, known before one is inspected or created."""
     if spec.kind == "vm" and spec.ports:
-        changes.append(
+        return [
             Change(
                 "ports",
                 Effect.UNSUPPORTED,
                 "ports are not supported on VMs: Incus only allows NAT-mode proxies "
                 "there, which need a static IPv4 address on the instance NIC",
             )
-        )
-    else:
-        changes.extend(_ports(spec, state))
-    return changes
+        ]
+    return []
 
 
 def _ports(spec: MachineSpec, state: MachineState) -> list[Change]:
