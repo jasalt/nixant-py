@@ -16,6 +16,25 @@ You describe an environment as a `nixosConfiguration` in your project's flake. n
 
 nixant never changes Incus server configuration.
 
+## Running nixant
+
+Nix builds the CLI, so the host needs no Python environment:
+
+```console
+$ nix run github:jasalt/nixant-py -- init     # a published revision
+$ nix profile install github:jasalt/nixant-py # or install `nixant` once
+```
+
+From a local checkout, use a `path:` reference:
+
+```console
+$ mkdir ~/shop && cd ~/shop && git init
+$ nix run path:/path/to/nixant -- init
+$ nix run path:/path/to/nixant -- up
+```
+
+A `path:` build has no git revision, so the generated project points at that build's source and only works on this machine (`init` warns). A plain `/path/to/nixant` from a clean tree instead pins the project to that commit on GitHub, which fails until the commit is pushed. A project keeps the nixant snapshot it was locked to; move it to newer local changes with `nix flake lock --override-input nixant path:/path/to/nixant`.
+
 ## Project setup
 
 Run `nixant init` in an empty project directory (`nixant init --list` shows the `default`, `node` and `python` templates). It writes `flake.nix` and `nix/dev.nix`, proposes `nixant.instanceName = "<dir>-dev"` (sanitized for Incus, with a warning if that instance already exists), locks the inputs, and stages the files in git when the directory is a work tree. If the lock step fails (for example offline), the files are kept and the exact `nix flake lock` command is printed.
