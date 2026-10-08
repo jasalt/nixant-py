@@ -10,6 +10,10 @@ from nixant.errors import NixantError
 
 SCHEMA_VERSION = 1
 
+# Incus instance names, which are also guest hostnames. nix/modules/options.nix
+# enforces the same rule at evaluation time.
+INSTANCE_NAME = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
 
 @dataclass(frozen=True)
 class MachineState:
@@ -190,10 +194,7 @@ class MachineSpec:
                     for port in data["ports"]
                 ),
             )
-            if (
-                re.fullmatch(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", spec.instance_name)
-                is None
-            ):
+            if INSTANCE_NAME.fullmatch(spec.instance_name) is None:
                 raise ValueError("invalid Incus instance name")
             if spec.kind not in ("container", "vm"):
                 raise ValueError("kind must be container or vm")

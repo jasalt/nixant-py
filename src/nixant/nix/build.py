@@ -1,10 +1,10 @@
 """Build evaluated derivations with a per-target, disposable GC root."""
 
 import json
-import re
 from pathlib import Path
 
 from nixant.errors import NixantError
+from nixant.nix.store import is_drv_path, is_store_path
 from nixant.project import project_id, state_directory, validate_target
 from nixant.run import Runner
 
@@ -15,7 +15,7 @@ def gcroot_path(root: Path, target: str) -> Path:
 
 
 def build(root: Path, target: str, drv_path: str, runner: Runner) -> str:
-    if re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+\.drv", drv_path) is None:
+    if not is_drv_path(drv_path):
         raise NixantError("invalid system derivation path")
     link = gcroot_path(root, target)
     try:
@@ -34,10 +34,7 @@ def build(root: Path, target: str, drv_path: str, runner: Runner) -> str:
         if len(outputs) != 1:
             raise ValueError("expected exactly one system output")
         path = outputs[0]["outputs"]["out"]
-        if (
-            not isinstance(path, str)
-            or re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+", path) is None
-        ):
+        if not is_store_path(path):
             raise ValueError("invalid system output path")
         return path
     except (ValueError, KeyError, TypeError, IndexError) as exc:

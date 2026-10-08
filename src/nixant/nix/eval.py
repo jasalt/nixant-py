@@ -1,13 +1,13 @@
 """Evaluate runtime and optionally the system derivation in one Nix invocation."""
 
 import json
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from nixant.errors import NixantError, UsageError
 from nixant.models import MachineSpec
+from nixant.nix.store import is_drv_path
 from nixant.project import evaluation_preflight, validate_target
 from nixant.run import Runner
 
@@ -30,10 +30,7 @@ def evaluate_spec(root: Path, target: str, runner: Runner) -> MachineSpec:
 
 
 def _drv_path(value: object) -> str:
-    if (
-        not isinstance(value, str)
-        or re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+\.drv", value) is None
-    ):
+    if not is_drv_path(value):
         raise NixantError(
             "invalid Nix evaluation response: invalid system derivation path"
         )

@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import shlex
 import sys
 from collections.abc import Mapping
@@ -10,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from nixant.errors import CommandError, NixantError, UsageError
+from nixant.naming import sanitize
 from nixant.project import in_git_work_tree
 from nixant.providers.base import Provider
 from nixant.run import Runner
@@ -21,9 +21,7 @@ DEFAULT_TEMPLATE = "default"
 
 def propose_instance_name(directory: Path) -> str:
     """Incus-valid name: lowercase [a-z0-9-], no leading digit or dash, <= 63."""
-    base = re.sub(r"[^a-z0-9]+", "-", directory.name.lower())
-    base = re.sub(r"^[0-9-]+", "", base)
-    base = base[:59].strip("-")
+    base = sanitize(directory.name)[:59].rstrip("-")
     return f"{base}-dev" if base else "ndev"
 
 

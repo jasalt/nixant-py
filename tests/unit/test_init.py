@@ -19,9 +19,18 @@ from nixant.init import (
     render,
 )
 from nixant.models import MachineState
+from nixant.naming import propose, validate_instance_name
 from nixant.run import Runner
 
 REPO = Path(__file__).parents[2]
+
+
+@pytest.mark.parametrize(
+    "directory", ["Shop", "--", "9", "a" * 80, "x-" * 40, "ÄÖ.ü", "My_Repo.v2"]
+)
+def test_proposals_are_always_valid_instance_names(directory: str) -> None:
+    validate_instance_name(propose_instance_name(Path("/x") / directory))
+    validate_instance_name(propose("shop-dev", Path("/x") / directory))
 
 
 @pytest.mark.parametrize(

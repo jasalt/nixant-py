@@ -10,6 +10,7 @@ from nixant.errors import NixantError, UsageError
 from nixant.models import MachineSpec
 from nixant.nix.build import build, gcroot_path
 from nixant.nix.eval import evaluate, evaluate_spec
+from nixant.nix.store import is_drv_path, is_store_path
 from nixant.run import Runner
 
 DRV = "/nix/store/" + "a" * 32 + "-system.drv"
@@ -221,3 +222,22 @@ def test_evaluate_rejects_invalid_derivation(
 ) -> None:
     with pytest.raises(NixantError, match="invalid system derivation path"):
         evaluate(tmp_path, "dev", runner_with({"runtime": runtime, "drvPath": drv}))
+
+
+H = "a" * 32
+
+
+@pytest.mark.parametrize(
+    ("value", "store", "drv"),
+    [
+        (f"/nix/store/{H}-system", True, False),
+        (f"/nix/store/{H}-system.drv", True, True),
+        (f"/nix/store/{H}-a/b.drv", False, False),
+        (f"/nix/store/{'A' * 32}-x.drv", False, False),
+        ("/tmp/system.drv", False, False),
+        (None, False, False),
+    ],
+)
+def test_store_path_shapes(value: object, store: bool, drv: bool) -> None:
+    assert is_store_path(value) is store
+    assert is_drv_path(value) is drv

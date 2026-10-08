@@ -4,14 +4,13 @@ import re
 from pathlib import Path
 
 from nixant.errors import NixantError, UsageError
+from nixant.models import INSTANCE_NAME
 from nixant.project import in_git_work_tree, validate_target
 from nixant.run import Runner
 
-NAME_PATTERN = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
-
 
 def validate_instance_name(name: str) -> str:
-    if NAME_PATTERN.fullmatch(name) is None:
+    if INSTANCE_NAME.fullmatch(name) is None:
         raise UsageError(
             f"invalid instance name {name!r}: use at most 63 characters of "
             "[a-z0-9-], starting with a letter and not ending with a dash"
@@ -25,6 +24,11 @@ def config_key(target: str) -> str:
 
 
 def sanitize(text: str) -> str:
+    """The longest Incus-name-safe form of text; empty when nothing usable remains.
+
+    Callers pick their own fallback: init names a whole instance, propose only
+    a suffix.
+    """
     base = re.sub(r"[^a-z0-9]+", "-", text.lower())
     return re.sub(r"^[0-9-]+", "", base).strip("-")
 
