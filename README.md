@@ -87,7 +87,7 @@ nixant = {
 - Leaving `cpus`, `memory` or `disk` as `null` keeps whatever the instance has.
 - A new instance gets the `disk` size at creation, even when it is smaller than the profile's root disk. Shrinking `disk` on an existing instance is refused. A storage pool that cannot enforce quotas (driver `dir`) is refused before anything is created.
 - `ephemeral = true` creates an Incus ephemeral instance: `nixant down` stops it and Incus deletes it (the next `up` builds a new one). The flag is fixed at creation; flipping it on an existing instance is refused until you destroy it.
-- The `workspace` mount (project root at `/workspace`) stays in place when you add other mounts; drop it with `nixant.mounts.workspace.enable = false`.
+- The `workspace` mount (project root at `/workspace`) stays in place when you add other mounts; drop it with `nixant.mounts.workspace.enable = false`, or override single keys such as `nixant.mounts.workspace.target = "/code"` or `readOnly = true`.
 - Mounts and ports that disappear from the configuration are removed from the instance.
 
 ## Agent isolation

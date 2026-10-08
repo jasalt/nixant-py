@@ -115,8 +115,12 @@ in {
     };
   };
   config = lib.mkIf cfg.enable {
-    # A default on the option itself would vanish as soon as another mount is added.
-    nixant.mounts.workspace = lib.mkDefault { source = "."; target = "/workspace"; };
+    # A default on the option itself would vanish as soon as another mount is
+    # added, and one on the whole attrset as soon as one of its keys is set.
+    nixant.mounts.workspace = {
+      source = lib.mkDefault ".";
+      target = lib.mkDefault "/workspace";
+    };
     assertions = validations;
     nixant.runtime = if errors != [] then throw (lib.concatStringsSep "\n" errors) else {
       schemaVersion = 1;

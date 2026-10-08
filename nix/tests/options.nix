@@ -50,7 +50,16 @@ let
     homeFallback = (evaluate { nixant.mounts.workspace.enable = false; }).workdir == "/home/dev";
     workspaceSurvivesOtherMounts = let runtime = evaluate { nixant.mounts.data = { source = "/d"; target = "/data"; }; };
       in runtime.mounts ? workspace && runtime.mounts ? data;
-    workspaceCanBeRetargeted = (evaluate { nixant.mounts.workspace.target = "/code"; }).workdir == "/code";
+    # Force the whole runtime: a partial override must keep the other defaults.
+    workspaceCanBeRetargeted = let runtime = evaluate { nixant.mounts.workspace.target = "/code"; };
+      in succeeds runtime && runtime.workdir == "/code"
+        && runtime.mounts.workspace == { source = "."; target = "/code"; readOnly = false; };
+    workspaceCanBeReadOnly = let runtime = evaluate { nixant.mounts.workspace.readOnly = true; };
+      in succeeds runtime
+        && runtime.mounts.workspace == { source = "."; target = "/workspace"; readOnly = true; };
+    workspaceSourceOverride = let runtime = evaluate { nixant.mounts.workspace.source = "sub"; };
+      in succeeds runtime && runtime.mounts.workspace.source == "sub"
+        && runtime.mounts.workspace.target == "/workspace";
     noWorkspaceMounts = !((evaluate { nixant.mounts.workspace.enable = false; }).mounts ? workspace);
     explicitWorkdir = (evaluate { nixant.workdir = "/tmp"; }).workdir == "/tmp";
     relativeWorkdir = rejects { nixant.workdir = "relative"; };
