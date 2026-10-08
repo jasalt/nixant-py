@@ -91,6 +91,8 @@ let
     wpCliConfigured = base_.config.environment.variables.WP_CLI_CONFIG_PATH == "/etc/wp-cli/config.yml"
       && base_.config.environment.etc."wp-cli/config.yml".text == "path: /var/lib/wordpress\n"
       && lib.any (p: (p.pname or "") == "wp-cli") base_.config.environment.systemPackages;
+    wpConfigDefaultsMerge = let c = (evaluate { extra.wordpress.wpConfig = { WP_POST_REVISIONS = 3; WP_DEBUG = false; }; }).config.wordpress.wpConfig;
+      in c.WP_POST_REVISIONS == 3 && c.WP_DEBUG == false && c.WP_DEBUG_LOG == true && c.WP_DEBUG_DISPLAY == false;
     badConstantName = fails "PHP constant names" { extra.wordpress.wpConfig."BAD NAME" = true; };
     componentsInSettings = let
       settings = settingsOf (evaluate { extra.wordpress = {

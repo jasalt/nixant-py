@@ -118,12 +118,13 @@ in {
 
     wpConfig = mkOption {
       type = types.attrsOf (types.oneOf [ types.bool types.int types.str ]);
-      default = {
-        WP_DEBUG = true;
-        WP_DEBUG_LOG = true;
-        WP_DEBUG_DISPLAY = false;
-      };
-      description = "Constants applied to wp-config.php with `wp config set` on every setup.";
+      default = {};
+      description = ''
+        Constants applied to wp-config.php with `wp config set` on every
+        setup. Debugging is on by default (`WP_DEBUG` and `WP_DEBUG_LOG`
+        true, `WP_DEBUG_DISPLAY` false); these defaults are set per key, so
+        adding constants keeps them and any key can be overridden.
+      '';
     };
 
     mailpit = {
@@ -134,6 +135,12 @@ in {
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
+      wordpress.wpConfig = {
+        WP_DEBUG = lib.mkDefault true;
+        WP_DEBUG_LOG = lib.mkDefault true;
+        WP_DEBUG_DISPLAY = lib.mkDefault false;
+      };
+
       assertions = [
         {
           assertion = hasNixant;
