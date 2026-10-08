@@ -15,7 +15,8 @@ let
     mailpitForwarded = lib.any (port: port.guest == 8025) config.nixant.ports;
     inputsFollowNixpkgs = inputs.nixant.inputs.nixpkgs.follows == "nixpkgs"
       && inputs.nixant-wp.inputs.nixpkgs.follows == "nixpkgs";
-    pluginsDirectoryShips = builtins.pathExists (template + "/plugins/.gitkeep");
+    rootIsPublic = config.wordpress.root == "public";
+    gitignoreKeepsSiteOut = lib.hasInfix "/public/*\n" (builtins.readFile (template + "/.gitignore"));
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))
   "nixant-wp template tests failed: ${lib.concatStringsSep ", " (builtins.attrNames (lib.filterAttrs (_: value: !value) tests))}";

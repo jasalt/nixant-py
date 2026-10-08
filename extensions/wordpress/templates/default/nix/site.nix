@@ -17,10 +17,8 @@
   wordpress = {
     enable = true;
     title = "Client site";
-    # Link plugins and themes from this repository into the site; paths are
-    # relative to the project root.
-    # plugins.my-plugin.path = "plugins/my-plugin";
-    # themes.my-theme.path = "themes/my-theme";
-    # activeTheme = "my-theme";
+    # The whole site lives in this directory of the project, shared with the
+    # guest: edit core, wp-config.php and wp-content on the host.
+    root = "public";
   };
 }

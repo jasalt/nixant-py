@@ -1,9 +1,10 @@
 # wp-site: setup and check logic for the nixant-wp WordPress site.
 #
 # Everything site-specific comes from the JSON file named by WP_SITE_SETTINGS,
-# which the NixOS module generates. `setup` is idempotent: it is rerun by
-# wordpress-setup.service whenever the settings change and must converge
-# without touching wp-config.php, wp-content or the database more than needed.
+# which the NixOS module generates. The web root is a project directory on the
+# host, and WordPress owns it: `setup` only creates what is missing (core,
+# wp-config.php, the installation) and keeps the database settings and the URL
+# current. It is rerun whenever the settings change and must be idempotent.
 
 die() {
   echo "wp-site: $*" >&2
@@ -20,97 +21,60 @@ load_settings() {
   [ -r "$WP_SITE_SETTINGS" ] || die "settings file $WP_SITE_SETTINGS is not readable"
   root=$(setting .root)
   core=$(setting .core)
-  core_id=$(setting .coreId)
   url=$(setting .url)
   title=$(setting .title)
   admin_user=$(setting .admin.user)
   admin_password=$(setting .admin.password)
   admin_email=$(setting .admin.email)
-  workspace=$(setting .workspace)
-  mu_plugin=$(setting .muPlugin)
   mailpit_ui_port=$(setting .mailpit.uiPort)
   db_name=$(setting .db.name)
   db_user=$(setting .db.user)
   db_socket=$(setting .db.socket)
   mailpit_url=$(setting '.mailpitUrl // "not forwarded to the host"')
   http_address=$(setting .httpAddress)
-  # The bundled wrapper has no useful HOME in a system service, and its cache
-  # must not land in the web root unprotected: Caddy hides dotfiles.
-  export WP_CLI_CACHE_DIR="$root/.cache/wp-cli"
 }
 
 wp() {
   command wp --path="$root" "$@"
 }
 
-# Store files are read-only; copy them as plain writable files. The new core is
-# recorded by finish_core, once the database has been upgraded to it.
-copy_core() {
-  local installed='' manifest="$root/.core-files" next="$root/.core-files.next" file
-  core_changed=
-  [ -e "$root/.core-version" ] && installed=$(<"$root/.core-version")
-  if [ "$installed" = "$core_id" ]; then
+# Copy the core into a web root that has none. Files already there, such as a
+# wp-content from git, are kept; afterwards WordPress updates its own files.
+seed_core() {
+  if [ -e "$root/wp-includes/version.php" ]; then
     return
   fi
   [ -e "$core/wp-includes/version.php" ] || die "$core is not a WordPress core (no wp-includes/version.php)"
-  echo "wp-site: installing WordPress core ($core_id)"
+  echo "wp-site: copying WordPress core into $root"
   mkdir -p "$root"
-  # Every store file has the same mtime, so compare contents, not size and time.
-  rsync -rlpc --chmod=Du=rwx,Dg=rx,Fu=rw,Fg=r \
-    --exclude=/wp-config.php --exclude=/wp-content/ \
-    "$core"/ "$root"/
-  # Remove only files the previous core shipped and this one does not, as
-  # WordPress's own updater does; anything else in the web root is the user's.
-  (cd "$core" && find . -path ./wp-content -prune -o ! -type d -print) | LC_ALL=C sort >"$next"
-  if [ -e "$manifest" ]; then
-    while IFS= read -r file; do
-      rm -f -- "$root/$file"
-    done < <(LC_ALL=C comm -23 "$manifest" "$next")
-  fi
-  mv -f "$next" "$manifest"
-  # Bundled themes and plugins are seeded once and only added afterwards, as
-  # WordPress's own updater does; content the user changed is left alone.
-  mkdir -p "$root/wp-content"
-  rsync -rltp --chmod=Du=rwx,Dg=rx,Fu=rw,Fg=r --ignore-existing \
-    "$core/wp-content/" "$root/wp-content/"
-  chmod 0750 "$root"
-  core_changed=1
+  rsync -rlp --chmod=D755,F644 --ignore-existing "$core"/ "$root"/
 }
 
-# Runs after wait_for_database, so a failing `wp core is-installed` means no
-# installation (which install_site then creates), not an unreachable database.
-finish_core() {
-  [ -n "$core_changed" ] || return 0
-  if wp core is-installed; then
-    wp core update-db
+# Set a wp-config.php constant only when it differs, so an unchanged file is
+# not rewritten under the host's editor.
+config_ensure() {
+  if [ "$(wp config get "$1" 2>/dev/null || true)" != "$2" ]; then
+    wp config set "$1" "$2"
   fi
-  printf '%s\n' "$core_id" >"$root/.core-version"
 }
 
 configure() {
   if [ ! -e "$root/wp-config.php" ]; then
     wp config create --skip-check --dbname="$db_name" --dbuser="$db_user" \
       --dbpass='' --dbhost="localhost:$db_socket"
+    # Development defaults, written once: wp-config.php is yours afterwards.
+    wp config set WP_DEBUG true --raw
+    wp config set WP_DEBUG_LOG true --raw
+    wp config set WP_DEBUG_DISPLAY false --raw
+    wp config set WP_ENVIRONMENT_TYPE local
+    # Core, plugins and themes change when you update them, not in the background.
+    wp config set AUTOMATIC_UPDATER_DISABLED true --raw
   fi
-  wp config set DB_NAME "$db_name"
-  wp config set DB_USER "$db_user"
-  wp config set DB_PASSWORD ''
-  wp config set DB_HOST "localhost:$db_socket"
-  # Core is managed by Nix; WordPress must not replace it behind its back.
-  wp config set AUTOMATIC_UPDATER_DISABLED true --raw
-  wp config set WP_AUTO_UPDATE_CORE false --raw
-  # Booleans and integers are written as PHP literals, strings as strings.
-  local key kind value
-  while IFS=$'\t' read -r key kind value; do
-    case "$kind" in
-      boolean | number) wp config set "$key" "$value" --raw ;;
-      *) wp config set "$key" "$value" ;;
-    esac
-  done < <(jq -r '.wpConfig | to_entries[] | [.key, (.value | type), (.value | tostring)] | @tsv' "$WP_SITE_SETTINGS")
-}
-
-install_mu_plugin() {
-  install -D -m 0644 "$mu_plugin" "$root/wp-content/mu-plugins/nixant-wp.php"
+  # Always the guest's database, also in a wp-config.php copied from elsewhere.
+  config_ensure DB_NAME "$db_name"
+  config_ensure DB_USER "$db_user"
+  config_ensure DB_PASSWORD ''
+  config_ensure DB_HOST "localhost:$db_socket"
 }
 
 wait_for_database() {
@@ -131,10 +95,11 @@ install_site() {
   fi
   wp core install --url="$url" --title="$title" --admin_user="$admin_user" \
     --admin_password="$admin_password" --admin_email="$admin_email" --skip-email
+  wp rewrite structure '/%postname%/'
 }
 
-# Keep home, siteurl and the permalink structure at their configured values,
-# for example after the forwarded host port changed.
+# Keep home and siteurl at the configured URL, for example after the forwarded
+# host port changed.
 converge_urls() {
   local option
   for option in home siteurl; do
@@ -142,69 +107,15 @@ converge_urls() {
       wp option update "$option" "$url"
     fi
   done
-  if [ "$(wp option get permalink_structure)" != '/%postname%/' ]; then
-    wp rewrite structure '/%postname%/'
-  fi
-}
-
-# Symlink every declared plugin or theme into wp-content, so host edits in the
-# workspace are live. Links this module created earlier (they point into the
-# workspace) but that are no longer declared are removed.
-link_components() {
-  local kind=$1 dir="$root/wp-content/$1" slug path source target link
-  mkdir -p "$dir"
-  while IFS=$'\t' read -r slug path; do
-    source="$workspace/$path"
-    target="$dir/$slug"
-    [ -e "$source" ] || die "$kind $slug: $source does not exist in the workspace"
-    if [ -L "$target" ]; then
-      ln -sfn "$source" "$target"
-    elif [ -e "$target" ]; then
-      die "$kind $slug: $target exists and is not a symlink; remove it or rename the $kind"
-    else
-      ln -s "$source" "$target"
-    fi
-  done < <(jq -r --arg kind "$kind" '.[$kind] | to_entries[] | [.key, .value.path] | @tsv' "$WP_SITE_SETTINGS")
-
-  for link in "$dir"/*; do
-    [ -L "$link" ] || continue
-    case "$(readlink "$link")" in
-      "$workspace"/*) ;;
-      *) continue ;;
-    esac
-    slug=${link##*/}
-    if ! jq -e --arg kind "$kind" --arg slug "$slug" '.[$kind] | has($slug)' "$WP_SITE_SETTINGS" >/dev/null; then
-      echo "wp-site: removing $kind $slug, no longer declared"
-      if [ "$kind" = plugins ]; then
-        wp plugin deactivate "$slug"
-      fi
-      rm "$link"
-    fi
-  done
-}
-
-activate_components() {
-  local slug theme
-  while read -r slug; do
-    wp plugin activate "$slug"
-  done < <(jq -r '.plugins | to_entries[] | select(.value.activate) | .key' "$WP_SITE_SETTINGS")
-  theme=$(jq -r '.activeTheme // empty' "$WP_SITE_SETTINGS")
-  if [ -n "$theme" ]; then
-    # Linked and bundled themes are installed already; anything else comes
-    # from wordpress.org, the one step that needs network access.
-    if ! wp theme is-installed "$theme"; then
-      wp theme install "$theme"
-    fi
-    wp theme activate "$theme"
-  fi
 }
 
 report() {
   cat <<REPORT
 WordPress is ready:
   site:    $url
-  admin:   $url/wp-admin/  ($admin_user / $admin_password; development only)
+  admin:   $url/wp-admin/  ($admin_user / $admin_password unless changed; development only)
   mailpit: $mailpit_url
+  files:   $root
 REPORT
 }
 
@@ -212,16 +123,11 @@ setup() {
   load_settings
   set -o errtrace # so the trap also covers the functions below
   trap 'echo "wp-site: setup failed at: $BASH_COMMAND" >&2' ERR
-  copy_core
+  seed_core
   configure
-  install_mu_plugin
   wait_for_database
-  finish_core
   install_site
   converge_urls
-  link_components plugins
-  link_components themes
-  activate_components
   report
 }
 
@@ -231,21 +137,8 @@ fail() {
   die "check failed: $1: $2"
 }
 
-check_core() {
-  local installed=
-  [ -e "$root/.core-version" ] && installed=$(<"$root/.core-version")
-  [ "$installed" = "$core_id" ] || fail core "installed '$installed', configured '$core_id'"
-}
-
 check_installed() {
   wp core is-installed || fail installed "wp core is-installed reports no installation"
-}
-
-check_plugins() {
-  local slug
-  while read -r slug; do
-    wp plugin is-active "$slug" || fail plugins "$slug is not active"
-  done < <(jq -r '.plugins | to_entries[] | select(.value.activate) | .key' "$WP_SITE_SETTINGS")
 }
 
 # The site URL names a host port that is not reachable from inside the guest,
@@ -280,7 +173,7 @@ check_mail() {
 check() {
   load_settings
   local step
-  for step in core installed plugins http mail; do
+  for step in installed http mail; do
     "check_$step"
     echo "ok: $step"
   done

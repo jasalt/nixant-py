@@ -53,27 +53,37 @@ let
       c.services.phpfpm.pools.wordpress.user == "dev" && c.services.caddy.user == "dev";
     databaseUserIsNixantUser = (builtins.head base_.config.services.mysql.ensureUsers).name == "dev";
     caddyServesWordpress = let site = base_.config.services.caddy.virtualHosts.":80".extraConfig; in
-      lib.hasInfix "root * /var/lib/wordpress" site && lib.hasInfix "/run/phpfpm/wordpress.sock" site;
+      lib.hasInfix "root * /workspace/public" site && lib.hasInfix "/run/phpfpm/wordpress.sock" site;
     caddyAdminOff = lib.hasInfix "admin off" base_.config.services.caddy.globalConfig
       && !base_.config.services.caddy.enableReload;
     mailpitPorts = let m = base_.config.services.mailpit.instances.wordpress; in
       m.listen == "127.0.0.1:8025" && m.smtp == "127.0.0.1:1025";
     mailpitPortsConfigurable = let m = (evaluate { extra.wordpress.mailpit = { uiPort = 9025; smtpPort = 9026; }; }).config.services.mailpit.instances.wordpress; in
       m.listen == "127.0.0.1:9025" && m.smtp == "127.0.0.1:9026";
-    stateDirectoryRule = lib.elem "d /var/lib/wordpress 0750 dev dev - -" base_.config.systemd.tmpfiles.rules;
     setupUnit = let u = base_.config.systemd.services.wordpress-setup; in
       u.serviceConfig.Type == "oneshot" && u.serviceConfig.RemainAfterExit
       && u.serviceConfig.User == "dev"
       && lib.elem "mysql.service" u.after && lib.elem "mysql.service" u.requires
       && lib.elem "multi-user.target" u.wantedBy
+      && u.unitConfig.RequiresMountsFor == "/workspace/public"
+      && u.serviceConfig.CacheDirectory == "wordpress-setup"
+      && u.environment.WP_CLI_CACHE_DIR == "/var/cache/wordpress-setup"
       && lib.hasSuffix "/bin/wp-site setup" u.serviceConfig.ExecStart;
     setupSettings = let
       u = base_.config.systemd.services.wordpress-setup;
       settings = settingsOf base_;
     in u.restartTriggers == [ u.environment.WP_SITE_SETTINGS ]
+      && settings.root == "/workspace/public"
       && settings.url == "http://localhost:8081" && settings.db.user == "dev"
       && settings.mailpitUrl == null
-      && lib.hasPrefix "/nix/store/" settings.core && lib.hasInfix settings.coreId settings.core;
+      && lib.hasPrefix "/nix/store/" settings.core;
+    rootIsConfigurable = let system = evaluate { extra.wordpress.root = "site/web"; }; in
+      (settingsOf system).root == "/workspace/site/web"
+      && lib.hasInfix "root * /workspace/site/web" system.config.services.caddy.virtualHosts.":80".extraConfig
+      && system.config.environment.etc."wp-cli/config.yml".text == "path: /workspace/site/web\n";
+    rootFollowsWorkspaceTarget = (settingsOf (evaluate {
+      extra.nixant.mounts.workspace.target = "/srv/project";
+    })).root == "/srv/project/public";
     mailpitUrlFromPorts = (settingsOf (evaluate {
       extra.nixant.ports = lib.mkForce [ { host = 8081; guest = 80; } { host = 9025; guest = 8025; } ];
     })).mailpitUrl == "http://localhost:9025";
@@ -81,68 +91,52 @@ let
       path = args: (evaluate args).config.systemd.services.wordpress-setup.environment.WP_SITE_SETTINGS;
     in path {} != path { extra.wordpress.title = "Other"; };
     coreIncludesThemes = builtins.pathExists "${base.package}/wp-content/themes/twentytwentyfive";
-    dotfilesHidden = lib.hasInfix "respond @dotfiles 404" base_.config.services.caddy.virtualHosts.":80".extraConfig;
+    hiddenPaths = lib.hasInfix ''@hidden path_regexp /\.|^/wp-content/debug\.log$''
+      base_.config.services.caddy.virtualHosts.":80".extraConfig;
     caddyBindsLoopback = lib.hasInfix "bind 127.0.0.1\n" base_.config.services.caddy.virtualHosts.":80".extraConfig
       && (settingsOf base_).httpAddress == "127.0.0.1";
     caddyListensEverywhere = let system = evaluate { extra.wordpress.listenAddress = null; }; in
       !(lib.hasInfix "bind " system.config.services.caddy.virtualHosts.":80".extraConfig)
       && (settingsOf system).httpAddress == "127.0.0.1";
-    coreIdIsPackageName = (settingsOf base_).coreId == base.package.name
-      && lib.hasPrefix "wordpress-core-" (settingsOf base_).coreId;
     fpmSendsMailToMailpit = lib.hasInfix "mailpit sendmail -S 127.0.0.1:1025"
       base_.config.services.phpfpm.pools.wordpress.phpOptions;
     opcacheRevalidates = lib.hasInfix "opcache.revalidate_freq = 0"
       base_.config.services.phpfpm.pools.wordpress.phpOptions;
     mailPortFollowsOption = lib.hasInfix "-S 127.0.0.1:9026"
       (evaluate { extra.wordpress.mailpit.smtpPort = 9026; }).config.services.phpfpm.pools.wordpress.phpOptions;
-    wpConfigInSettings = (settingsOf base_).wpConfig.WP_DEBUG == true
-      && (settingsOf (evaluate { extra.wordpress.wpConfig.WP_HOME_NAME = "x"; })).wpConfig.WP_HOME_NAME == "x";
     wpCliConfigured = base_.config.environment.variables.WP_CLI_CONFIG_PATH == "/etc/wp-cli/config.yml"
-      && base_.config.environment.etc."wp-cli/config.yml".text == "path: /var/lib/wordpress\n"
+      && base_.config.environment.etc."wp-cli/config.yml".text == "path: /workspace/public\n"
       && lib.any (p: (p.pname or "") == "wp-cli") base_.config.environment.systemPackages;
-    wpConfigDefaultsMerge = let c = (evaluate { extra.wordpress.wpConfig = { WP_POST_REVISIONS = 3; WP_DEBUG = false; }; }).config.wordpress.wpConfig;
-      in c.WP_POST_REVISIONS == 3 && c.WP_DEBUG == false && c.WP_DEBUG_LOG == true && c.WP_DEBUG_DISPLAY == false;
-    mailFromPlugin = let
-      settings = settingsOf (evaluate { extra.wordpress.mailFrom = "dev@client.test"; });
-      plugin = builtins.readFile (builtins.unsafeDiscardStringContext settings.muPlugin);
-    in lib.hasInfix "wp_mail_from" plugin && lib.hasInfix ''"dev@client.test"'' plugin;
+    # FPM and WP-CLI both prepend the same guest-only file that fixes the sender.
+    mailFromPrepend = let
+      system = evaluate { extra.wordpress.mailFrom = "dev@client.test"; };
+      cli = lib.findFirst (p: (p.pname or "") == "wp-cli") null system.config.environment.systemPackages;
+      # Reading the WP-CLI ini builds it, which makes the file it names readable.
+      cliIni = builtins.readFile "${cli}/etc/php.ini";
+      path = builtins.head (builtins.match ".*auto_prepend_file = ([^\n]*).*" cliIni);
+      prepend = builtins.readFile path;
+    in lib.hasInfix "auto_prepend_file = ${path}\n" system.config.services.phpfpm.pools.wordpress.phpOptions
+      && lib.hasInfix "$GLOBALS['wp_filter']['wp_mail_from']" prepend
+      && lib.hasInfix ''is_email( $from ) ? $from : "dev@client.test"'' prepend;
     checkSettingsExported = base_.config.environment.etc."wordpress/site.json".source
         == base_.config.systemd.services.wordpress-setup.environment.WP_SITE_SETTINGS
       && (settingsOf base_).mailpit.uiPort == 8025;
     agentIsolationKeepsUrl = valid { extra.nixant.isolation = "agent"; }
       && (evaluate { extra.nixant.isolation = "agent"; }).config.wordpress.url == "http://localhost:8081";
-    badConstantName = fails "PHP constant names" { extra.wordpress.wpConfig."BAD NAME" = true; };
-    componentsInSettings = let
-      settings = settingsOf (evaluate { extra.wordpress = {
-        plugins.my-plugin = { path = "plugins/my-plugin"; };
-        plugins.inactive = { path = "plugins/inactive"; activate = false; };
-        themes.my-theme.path = "themes/my-theme";
-        activeTheme = "my-theme";
-      }; });
-    in settings.workspace == "/workspace"
-      && settings.plugins.my-plugin == { path = "plugins/my-plugin"; activate = true; }
-      && !settings.plugins.inactive.activate
-      && settings.themes.my-theme.path == "themes/my-theme" && settings.activeTheme == "my-theme";
-    componentsNeedWorkspace = fails "keep nixant.mounts.workspace enabled" {
-      extra.wordpress.plugins.p.path = "p";
+    rootNeedsWorkspace = fails "keep nixant.mounts.workspace enabled" {
       extra.nixant.mounts.workspace.enable = false;
     };
     nothingWhenDisabled = !(evaluate { extra.wordpress.enable = lib.mkForce false; }).config.services.caddy.enable;
-    defaultsAreDevelopmentOnly = base.admin.user == "admin" && base.wpConfig.WP_DEBUG_DISPLAY == false;
+    defaultsAreDevelopmentOnly = base.admin.user == "admin" && base.root == "public";
 
     missingNixant = fails "nixant options are missing" { withNixant = false; extra.wordpress.url = "http://localhost:8081"; };
-    badPluginSlug = fails "wordpress.plugins: slugs" { extra.wordpress.plugins."bad slug".path = "plugins/x"; };
-    badThemeSlug = fails "wordpress.themes: slugs" { extra.wordpress.themes."a/b".path = "themes/x"; };
-    parentPath = fails "must not contain '..'" { extra.wordpress.plugins.p.path = "../outside"; };
-    nestedParentPath = fails "must not contain '..'" { extra.wordpress.themes.t.path = "a/../../b"; };
-    absolutePath = fails "relative to the workspace" { extra.wordpress.plugins.p.path = "/etc"; };
-    emptyPath = fails "relative to the workspace" { extra.wordpress.plugins.p.path = ""; };
-    goodPaths = valid { extra.wordpress = { plugins.my-plugin.path = "plugins/my-plugin"; themes.my_theme.path = "themes/my_theme"; }; };
-    dotsInNamesAllowed = valid { extra.wordpress.plugins.p.path = "plugins/v1..2/p"; };
+    parentRoot = fails "must not contain '..'" { extra.wordpress.root = "../outside"; };
+    nestedParentRoot = fails "must not contain '..'" { extra.wordpress.root = "a/../../b"; };
+    absoluteRoot = fails "relative to the project root" { extra.wordpress.root = "/etc"; };
+    emptyRoot = fails "relative to the project root" { extra.wordpress.root = ""; };
+    dotsInNamesAllowed = valid { extra.wordpress.root = "sites/v1..2/web"; };
     underivableUrl = fails "cannot be derived" { extra.nixant.ports = lib.mkForce []; };
     nonHttpUrl = fails "must start with http://" { extra.wordpress.url = "https://localhost"; };
-    badActiveTheme = fails "activeTheme" { extra.wordpress.activeTheme = "no spaces"; };
-    goodActiveTheme = valid { extra.wordpress.activeTheme = "twentytwentyfive"; };
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))
   "nixant-wp eval tests failed: ${lib.concatStringsSep ", " (builtins.attrNames (lib.filterAttrs (_: value: !value) tests))}";

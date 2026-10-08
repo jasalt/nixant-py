@@ -8,8 +8,6 @@ let
   hasNixant = options ? nixant;
   nixantPorts = lib.optionals hasNixant config.nixant.ports;
 
-  slug = "[A-Za-z0-9_-]+";
-  isSlug = value: builtins.match slug value != null;
   safePath = path:
     !(lib.hasPrefix "/" path)
     && path != ""
@@ -20,24 +18,6 @@ let
     let web = builtins.filter (port: port.guest == 80) nixantPorts;
     in if web == [] then null else "http://localhost:${toString (builtins.head web).host}";
 
-  componentOptions = description: {
-    path = mkOption {
-      type = types.str;
-      example = "plugins/my-plugin";
-      description = "${description} directory, relative to the workspace mount.";
-    };
-  };
-  pluginType = types.submodule {
-    options = componentOptions "Plugin" // {
-      activate = mkOption {
-        type = types.bool;
-        default = true;
-        description = "Activate the plugin during setup.";
-      };
-    };
-  };
-  themeType = types.submodule { options = componentOptions "Theme"; };
-
   # nixpkgs' wordpress package drops the bundled themes and plugins, which
   # leaves a fresh site without a theme. The upstream tarball has them.
   upstreamCore = pkgs.runCommand "wordpress-core-${pkgs.wordpress.version}" {
@@ -46,24 +26,30 @@ let
     mkdir "$out"
     tar -xzf ${pkgs.wordpress.src} --strip-components=1 -C "$out"
   '';
-
-  bad = names: lib.concatStringsSep ", " (map (name: "'${name}'") names);
-  unsafe = components:
-    builtins.attrNames (lib.filterAttrs (_: component: !safePath component.path) components);
 in {
   options.wordpress = {
     enable = lib.mkEnableOption "an isolated WordPress development site";
+
+    root = mkOption {
+      type = types.str;
+      default = "public";
+      description = ''
+        Web root, relative to the project root (the workspace mount). The
+        whole WordPress installation lives here on the host: core,
+        wp-config.php and wp-content. An existing installation is used as it
+        is; an empty or missing directory gets a fresh core.
+      '';
+    };
 
     package = mkOption {
       type = types.package;
       default = upstreamCore;
       defaultText = lib.literalExpression "the unpacked pkgs.wordpress.src tarball";
       description = ''
-        WordPress core source, copied into /var/lib/wordpress by the setup
-        unit. The default is the upstream tarball of nixpkgs' WordPress, whose
-        own package omits the bundled themes and plugins. The core is copied
-        again when the package's name changes, so a rebuild of the same
-        version does not touch the site; give a patched core its own name.
+        WordPress core that seeds the web root when it has no wp-includes yet.
+        After that WordPress owns its files and updates them itself. The
+        default is the upstream tarball of nixpkgs' WordPress, whose own
+        package omits the bundled themes and plugins.
       '';
     };
 
@@ -101,53 +87,25 @@ in {
       defaultText = lib.literalExpression ''"http://localhost:<host port forwarded to guest 80>"'';
       example = "http://localhost:8081";
       description = ''
-        Site URL. Derived from the `nixant.ports` entry whose guest port is 80;
-        set it explicitly when there is none.
+        Site URL, kept in the home and siteurl options. Derived from the
+        `nixant.ports` entry whose guest port is 80; set it explicitly when
+        there is none.
       '';
     };
 
     admin = {
-      user = mkOption { type = types.str; default = "admin"; description = "Development-only administrator login."; };
-      password = mkOption { type = types.str; default = "password"; description = "Development-only administrator password."; };
-      email = mkOption { type = types.str; default = "admin@example.test"; description = "Administrator email address."; };
-    };
-
-    plugins = mkOption {
-      type = types.attrsOf pluginType;
-      default = {};
-      description = "Plugins linked from the workspace into wp-content/plugins, by slug.";
-    };
-
-    themes = mkOption {
-      type = types.attrsOf themeType;
-      default = {};
-      description = "Themes linked from the workspace into wp-content/themes, by slug.";
-    };
-
-    activeTheme = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      description = "Slug of the theme to activate; installed from wordpress.org if not linked or bundled.";
-    };
-
-    wpConfig = mkOption {
-      type = types.attrsOf (types.oneOf [ types.bool types.int types.str ]);
-      default = {};
-      description = ''
-        Constants applied to wp-config.php with `wp config set` on every
-        setup. Debugging is on by default (`WP_DEBUG` and `WP_DEBUG_LOG`
-        true, `WP_DEBUG_DISPLAY` false); these defaults are set per key, so
-        adding constants keeps them and any key can be overridden.
-      '';
+      user = mkOption { type = types.str; default = "admin"; description = "Development-only administrator login, used at the first install only."; };
+      password = mkOption { type = types.str; default = "password"; description = "Development-only administrator password, used at the first install only."; };
+      email = mkOption { type = types.str; default = "admin@example.test"; description = "Administrator email address, used at the first install only."; };
     };
 
     mailFrom = mkOption {
       type = types.str;
       default = "wordpress@example.test";
       description = ''
-        Sender address of WordPress mail. WordPress derives
-        `wordpress@<host>` by default, and `wordpress@localhost` is rejected
-        as invalid, so mail would never reach Mailpit.
+        Sender address of WordPress mail whose own sender is not a valid
+        address. WordPress derives `wordpress@<host>` by default, and
+        `wordpress@localhost` is rejected, so mail would never reach Mailpit.
       '';
     };
 
@@ -159,32 +117,14 @@ in {
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
-      wordpress.wpConfig = {
-        WP_DEBUG = lib.mkDefault true;
-        WP_DEBUG_LOG = lib.mkDefault true;
-        WP_DEBUG_DISPLAY = lib.mkDefault false;
-      };
-
       assertions = [
         {
           assertion = hasNixant;
           message = "wordpress: the nixant options are missing; import nixant.nixosModules.container (or nixant.nixosModules.vm) next to the wordpress module.";
         }
         {
-          assertion = !(builtins.any (name: !isSlug name) (builtins.attrNames cfg.plugins));
-          message = "wordpress.plugins: slugs must match ${slug}; got ${bad (builtins.filter (name: !isSlug name) (builtins.attrNames cfg.plugins))}.";
-        }
-        {
-          assertion = !(builtins.any (name: !isSlug name) (builtins.attrNames cfg.themes));
-          message = "wordpress.themes: slugs must match ${slug}; got ${bad (builtins.filter (name: !isSlug name) (builtins.attrNames cfg.themes))}.";
-        }
-        {
-          assertion = unsafe cfg.plugins == [];
-          message = "wordpress.plugins: paths must be relative to the workspace and must not contain '..'; check ${bad (unsafe cfg.plugins)}.";
-        }
-        {
-          assertion = unsafe cfg.themes == [];
-          message = "wordpress.themes: paths must be relative to the workspace and must not contain '..'; check ${bad (unsafe cfg.themes)}.";
+          assertion = safePath cfg.root;
+          message = "wordpress.root must be relative to the project root and must not contain '..'; got '${cfg.root}'.";
         }
         {
           assertion = cfg.url != null;
@@ -194,14 +134,6 @@ in {
           assertion = cfg.url == null || lib.hasPrefix "http://" cfg.url;
           message = "wordpress.url must start with http:// (TLS is not supported); got '${toString cfg.url}'.";
         }
-        {
-          assertion = !(builtins.any (name: builtins.match "[A-Za-z_][A-Za-z0-9_]*" name == null) (builtins.attrNames cfg.wpConfig));
-          message = "wordpress.wpConfig: names must be PHP constant names; got ${bad (builtins.filter (name: builtins.match "[A-Za-z_][A-Za-z0-9_]*" name == null) (builtins.attrNames cfg.wpConfig))}.";
-        }
-        {
-          assertion = cfg.activeTheme == null || isSlug cfg.activeTheme;
-          message = "wordpress.activeTheme must match ${slug}; got '${toString cfg.activeTheme}'.";
-        }
       ];
     }
     # Everything below reads config.nixant, so it stays behind hasNixant: a
@@ -210,53 +142,59 @@ in {
       let
         user = config.nixant.user.name;
         group = config.users.users.${user}.group;
-        root = "/var/lib/wordpress";
+        root = "${config.nixant.mounts.workspace.target}/${cfg.root}";
         pool = config.services.phpfpm.pools.wordpress;
         db = { name = "wordpress"; socket = "/run/mysqld/mysqld.sock"; };
         sendmailPath = "${pkgs.mailpit}/bin/mailpit sendmail -S 127.0.0.1:${toString cfg.mailpit.smtpPort}";
+        # Runs before every PHP script in the guest, so the sender fix needs no
+        # file in the project's wp-content (which may be deployed elsewhere).
+        # WordPress turns callbacks registered in $wp_filter before it loads
+        # into hooks.
+        mailPrepend = pkgs.writeText "nixant-wp-prepend.php" ''
+          <?php
+          // nixant-wp: replace an invalid WordPress mail sender, such as
+          // wordpress@localhost, so mail reaches Mailpit.
+          $GLOBALS['wp_filter']['wp_mail_from'][10][] = array(
+            'function' => static function ( $from ) {
+              return is_email( $from ) ? $from : ${builtins.toJSON cfg.mailFrom};
+            },
+            'accepted_args' => 1,
+          );
+        '';
         # wp-cli runs on the module's PHP with its own ini, which needs the same
-        # sendmail_path as PHP-FPM so wp_mail from the CLI reaches Mailpit.
+        # mail settings as PHP-FPM so wp_mail from the CLI reaches Mailpit.
         wpCli = pkgs.wp-cli.override {
           php = cfg.phpPackage;
           phpIniFile = pkgs.writeText "php.ini" ''
             memory_limit = -1
             phar.readonly = Off
             sendmail_path = ${sendmailPath}
+            auto_prepend_file = ${mailPrepend}
           '';
         };
         wpSite = pkgs.callPackage ./wp-site.nix { wp-cli = wpCli; };
         uiPort = builtins.filter (port: port.guest == cfg.mailpit.uiPort) config.nixant.ports;
-        # Must-use plugin, installed by setup on every run.
-        muPlugin = pkgs.writeText "nixant-wp.php" ''
-          <?php
-          // Managed by nixant-wp; changes are overwritten on the next setup.
-          add_filter( 'wp_mail_from', function () { return ${builtins.toJSON cfg.mailFrom}; } );
-        '';
         # Everything wp-site setup needs; a change reruns the setup unit.
         settingsFile = pkgs.writeText "wordpress-site.json" (builtins.toJSON {
           inherit root;
-          inherit (cfg) title url admin wpConfig plugins themes activeTheme;
-          workspace = config.nixant.mounts.workspace.target;
-          muPlugin = "${muPlugin}";
+          inherit (cfg) title url admin;
           mailpit = { inherit (cfg.mailpit) uiPort smtpPort; };
           # `wp-site check` requests the site here.
           httpAddress = if cfg.listenAddress == null then "127.0.0.1" else cfg.listenAddress;
           core = "${cfg.package}";
-          # The name, not the store path: a rebuild with a new hash but the
-          # same name (version) must not copy the core again.
-          coreId = cfg.package.name or (builtins.baseNameOf "${cfg.package}");
           db = db // { user = user; };
           mailpitUrl = if uiPort == [] then null
             else "http://localhost:${toString (builtins.head uiPort).host}";
         });
       in {
         assertions = [{
-          assertion = (cfg.plugins == {} && cfg.themes == {}) || config.nixant.mounts.workspace.enable;
-          message = "wordpress.plugins and wordpress.themes link from the workspace mount; keep nixant.mounts.workspace enabled.";
+          assertion = config.nixant.mounts.workspace.enable;
+          message = "wordpress.root lives in the workspace mount; keep nixant.mounts.workspace enabled.";
         }];
 
         # PHP-FPM, Caddy and the setup unit all run as the nixant user, so the
-        # idmapped workspace mount is readable and writable without extra groups.
+        # idmapped workspace mount is readable and writable without extra groups,
+        # and files WordPress writes are owned by the host user.
         # `nixant exec -- wp ...` works from any directory: bash -lc reads
         # /etc/profile, which exports WP_CLI_CONFIG_PATH.
         environment.systemPackages = [ wpCli wpSite ];
@@ -264,8 +202,6 @@ in {
         # `wp-site check` finds the settings here when run by hand.
         environment.etc."wordpress/site.json".source = settingsFile;
         environment.variables.WP_CLI_CONFIG_PATH = "/etc/wp-cli/config.yml";
-
-        systemd.tmpfiles.rules = [ "d ${root} 0750 ${user} ${group} - -" ];
 
         # unix_socket authentication: the database user is the nixant user and
         # has no password.
@@ -287,7 +223,8 @@ in {
             post_max_size = 64M
             memory_limit = 512M
             sendmail_path = ${sendmailPath}
-            ; Edits in the workspace must show up on the next request.
+            auto_prepend_file = ${mailPrepend}
+            ; Edits on the host must show up on the next request.
             opcache.validate_timestamps = 1
             opcache.revalidate_freq = 0
           '';
@@ -314,29 +251,37 @@ in {
             bind ${cfg.listenAddress}
           '' + ''
             root * ${root}
-            # Setup state (.core-version, .core-files, .cache) lives in the web root.
-            @dotfiles path /.*
-            respond @dotfiles 404
+            # The web root is a project directory: hide dotfiles anywhere in it
+            # (.git, .env, .user.ini) and the PHP error log.
+            @hidden path_regexp /\.|^/wp-content/debug\.log$
+            respond @hidden 404
             encode gzip
             php_fastcgi unix/${pool.socket}
             file_server
           '';
         };
 
-        # Converges core, wp-config and the install; a failure shows up as a
+        # Seeds the core and installs the site when needed, then keeps the
+        # database settings and the URL current; a failure shows up as a
         # degraded activation (journalctl -u wordpress-setup).
         systemd.services.wordpress-setup = {
-          description = "Converge the WordPress site";
+          description = "Set up the WordPress site";
           wantedBy = [ "multi-user.target" ];
           after = [ "mysql.service" ];
           requires = [ "mysql.service" ];
+          unitConfig.RequiresMountsFor = root;
           restartTriggers = [ settingsFile ];
-          environment.WP_SITE_SETTINGS = settingsFile;
+          environment = {
+            WP_SITE_SETTINGS = settingsFile;
+            # Keep WP-CLI's cache in the guest, out of the project.
+            WP_CLI_CACHE_DIR = "/var/cache/wordpress-setup";
+          };
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
             User = user;
             Group = group;
+            CacheDirectory = "wordpress-setup";
             ExecStart = "${wpSite}/bin/wp-site setup";
             TimeoutStartSec = 600;
           };

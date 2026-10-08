@@ -2,7 +2,8 @@
 # Opt-in integration test: the whole MVP workflow against a real Incus.
 #
 # Creates two throwaway clients from the template, brings both up in parallel
-# with `nixant up`, checks them, edits a plugin on the host and destroys both.
+# with `nixant up`, checks them, checks that the site's files are on the host,
+# edits a plugin on the host and destroys both.
 # Instances are named nixwp-it-<pid>-{a,b} and removed on every exit path.
 #
 # Needs Nix with flakes, Incus (your user in incus-admin) and a nixant
@@ -55,7 +56,7 @@ ncli() { local client=$1; shift; in_client "$client" "$nixant" "$@"; }
 
 make_client() {
   local client=$1 dir="$work/$1"
-  mkdir -p "$dir/plugins/it-plugin"
+  mkdir -p "$dir/public/wp-content/plugins/it-plugin"
   (
     cd "$dir"
     git init -q
@@ -66,9 +67,8 @@ make_client() {
       -e "s/host = 8081;/host = ${ports[$client]};/" \
       -e "s/host = 8025;/host = ${ui_ports[$client]};/" \
       -e "s/title = \"Client site\"/title = \"Client $client\"/" \
-      -e 's|# plugins.my-plugin.path = "plugins/my-plugin";|plugins.it-plugin.path = "plugins/it-plugin";|' \
       nix/site.nix
-    cat >plugins/it-plugin/it-plugin.php <<PHP
+    cat >public/wp-content/plugins/it-plugin/it-plugin.php <<PHP
 <?php
 /* Plugin Name: Integration plugin */
 add_action( 'wp_footer', function () { echo '<!-- it-plugin v1 -->'; } );
@@ -100,6 +100,14 @@ done
 step "wp-site check on both clients"
 for client in "${clients[@]}"; do
   ncli "$client" exec -- wp-site check || fail "wp-site check failed for client $client"
+  ncli "$client" exec -- wp plugin activate it-plugin >/dev/null || fail "client $client cannot activate its plugin"
+done
+
+step "the site's files are on the host, owned by the host user"
+for client in "${clients[@]}"; do
+  [ -e "$work/$client/public/wp-includes/version.php" ] || fail "client $client has no core on the host"
+  [ "$(stat -c %u "$work/$client/public/wp-config.php")" = "$(id -u)" ] \
+    || fail "client $client: wp-config.php is not owned by the host user"
 done
 
 step "clients are isolated"
@@ -109,9 +117,9 @@ for client in "${clients[@]}"; do
   page_has "${ports[$client]}" "<title>Client $client" || fail "client $client does not serve its own site"
 done
 
-step "host edit of a linked plugin is live without nixant up"
+step "host edit of a plugin is live without nixant up"
 page_has "${ports[a]}" 'it-plugin v1' || fail "plugin output v1 missing"
-sed -i 's/it-plugin v1/it-plugin v2/' "$work/a/plugins/it-plugin/it-plugin.php"
+sed -i 's/it-plugin v1/it-plugin v2/' "$work/a/public/wp-content/plugins/it-plugin/it-plugin.php"
 page_has "${ports[a]}" 'it-plugin v2' || fail "host edit did not show up"
 
 step "rerunning nixant up is a no-op"
