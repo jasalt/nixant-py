@@ -75,6 +75,14 @@ def test_resolve_table(state: MachineState, tmp_path: Path) -> None:
         resolve(provider, tmp_path, "dev", "renamed", kind="container")
     with pytest.raises(NixantError, match="destroy and up"):
         resolve(provider, tmp_path, "dev", "test-dev", kind="vm")
+    mismatched = replace(state, config={**state.config, PREFIX + "schema": "2"})
+    provider.find.return_value = [mismatched]
+    with pytest.raises(NixantError, match="uses nixant schema 2"):
+        resolve(provider, tmp_path, "dev", "test-dev", kind="container")
+    provider.find.return_value = []
+    provider.inspect.return_value = mismatched
+    with pytest.raises(NixantError, match="uses nixant schema 2"):
+        resolve(provider, tmp_path, "dev", "test-dev", kind="container")
     provider.find.return_value = [state, replace(state, name="copy")]
     with pytest.raises(NixantError, match="multiple instances"):
         resolve(provider, tmp_path, "dev", "test-dev", kind="container")

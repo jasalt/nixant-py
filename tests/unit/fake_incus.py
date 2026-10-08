@@ -69,6 +69,13 @@ class FakeIncus:
         stdout = b""
         if argv[:2] == ["incus", "create"]:
             self.create(argv)
+        elif argv[:3] == ["incus", "list", "local:"]:
+            # Filters are config key=value pairs, ANDed, as nixant passes them.
+            filters = dict(item.split("=", 1) for item in argv[3:-2])
+            found = self.data is not None and all(
+                self.data["config"].get(key) == value for key, value in filters.items()
+            )
+            stdout = json.dumps([self.response()] if found else []).encode()
         elif argv[:3] == ["incus", "query", "local:/1.0/profiles/default"]:
             stdout = json.dumps({"devices": {"root": self.profile_root}}).encode()
         elif argv[:3] == ["incus", "query", "local:/1.0/storage-pools/default"]:

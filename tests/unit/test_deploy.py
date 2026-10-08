@@ -13,7 +13,7 @@ from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
 from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
-from nixant.ownership import PREFIX
+from nixant.ownership import PREFIX, metadata, resolve
 from nixant.planner import SetConfig, SetRootSize, mount_device, plan
 from nixant.run import Runner
 
@@ -241,8 +241,9 @@ def install_fake(
     runner = Mock(spec=Runner)
     runner.run.side_effect = fake.run
     provider = IncusProvider(runner)
-    # Resolve reads the fake's current state, so tests may adjust it first.
-    deploy["resolve"].side_effect = lambda *args, **kwargs: provider.inspect("test-dev")
+    deploy["incus"] = Mock(wraps=provider)
+    # Ownership checks run for real against the fake's current state.
+    monkeypatch.setattr("nixant.deploy.resolve", resolve)
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda runner: provider)
     monkeypatch.setattr("nixant.deploy.can_skip", can_skip)
 
@@ -257,6 +258,7 @@ def running_deploy(
         "status": "Running",
         "type": "container",
         "config": {
+            **metadata(tmp_path, "dev"),
             PREFIX + "activation": "ok",
             PREFIX + "system": "system",
             PREFIX + "user": "dev",
@@ -373,7 +375,7 @@ def test_planned_mounts_converge_in_one_pass(
     result = CliRunner().invoke(app, ["up"])
     assert result.exit_code == 0, result.output
     # Nothing is left for a second pass, so no path can undo the planner.
-    assert plan(spec, deploy["resolve"]()) == []
+    assert plan(spec, deploy["incus"].inspect("test-dev")) == []
 
 
 def test_invalid_mount_is_rejected_before_building(
@@ -406,9 +408,40 @@ def test_up_reports_a_quota_error_at_creation(
     assert result.exit_code == 1
     assert "quota" in result.output
     assert fresh_deploy.data is None
-    assert [argv[:2] for argv in fresh_deploy.calls if argv[1] != "query"] == [
-        ["incus", "create"]
+    mutations = [
+        argv for argv in fresh_deploy.calls if argv[1] not in ("query", "list")
     ]
+    assert [argv[:2] for argv in mutations] == [["incus", "create"]]
+    deploy["activate"].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"root": "other"}, "belongs to"),
+        ({"schema": "2"}, "uses nixant schema 2"),
+        ({"target": "other"}, "belongs to target other"),
+        ({"managed": "false"}, "not managed by nixant"),
+    ],
+)
+def test_up_refuses_an_instance_it_does_not_own(
+    deploy: dict[str, Mock],
+    running_deploy: dict,
+    tmp_path: Path,
+    config: dict[str, str],
+    message: str,
+) -> None:
+    if "root" in config:
+        running_deploy["config"].update(metadata(tmp_path / "other", "dev"))
+    else:
+        running_deploy["config"].update(
+            {PREFIX + key: value for key, value in config.items()}
+        )
+    before = json.dumps(running_deploy, sort_keys=True)
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 1
+    assert message in result.output
+    assert json.dumps(running_deploy, sort_keys=True) == before
     deploy["activate"].assert_not_called()
 
 
