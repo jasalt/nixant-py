@@ -85,7 +85,7 @@ nixant = {
 
 - Only `nixant-` devices, the limit keys, and the `size` key of the instance's own `root` device are touched. Profiles and other devices are never modified.
 - Leaving `cpus`, `memory` or `disk` as `null` keeps whatever the instance has.
-- Shrinking `disk` is refused. A storage pool that cannot enforce quotas (driver `dir`) is refused before anything is created.
+- A new instance gets the `disk` size at creation, even when it is smaller than the profile's root disk. Shrinking `disk` on an existing instance is refused. A storage pool that cannot enforce quotas (driver `dir`) is refused before anything is created.
 - `ephemeral = true` creates an Incus ephemeral instance: `nixant down` stops it and Incus deletes it (the next `up` builds a new one). The flag is fixed at creation; flipping it on an existing instance is refused until you destroy it.
 - The `workspace` mount (project root at `/workspace`) stays in place when you add other mounts; drop it with `nixant.mounts.workspace.enable = false`.
 - Mounts and ports that disappear from the configuration are removed from the instance.

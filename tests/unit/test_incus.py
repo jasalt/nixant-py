@@ -125,6 +125,19 @@ def test_create_vm(provider: IncusProvider) -> None:
     ]
 
 
+@pytest.mark.parametrize("kind", ["container", "vm"])
+def test_create_overrides_root_size(provider: IncusProvider, kind: str) -> None:
+    data = json.loads(
+        (Path(__file__).parents[2] / "nix/tests/runtime.json").read_text()
+    )
+    spec = replace(
+        MachineSpec.from_runtime(data), kind=kind, mounts=(), disk_bytes=10 * 2**30
+    )
+    provider.create(spec, {})
+    argv = provider.runner.run.call_args.args[0]
+    assert argv[-2:] == ["-d", f"root,size={10 * 2**30}"]
+
+
 def test_lifecycle(provider: IncusProvider) -> None:
     provider.start("dev")
     provider.stop("dev")

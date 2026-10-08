@@ -230,6 +230,111 @@ def test_invalid_duration(value: str) -> None:
 UNRELATED = {"type": "disk", "source": "/other", "path": "/other"}
 
 
+class FakeIncus:
+    """An in-memory Incus that enforces the rules nixant must work within."""
+
+    def __init__(self, data: dict | None, profile_root: dict) -> None:
+        self.data = data
+        self.profile_root = profile_root
+        self.calls: list[list[str]] = []
+        self.fail: dict[str, bytes] = {}
+
+    def response(self) -> dict:
+        assert self.data is not None
+        root = {**self.profile_root, **self.data["devices"].get("root", {})}
+        return {**self.data, "expanded_devices": {**self.data["devices"], "root": root}}
+
+    def claim_path(self, device: str, path: str | None) -> None:
+        # Incus refuses two disk devices mounted at the same guest path.
+        assert self.data is not None
+        for other, existing in self.data["devices"].items():
+            if other != device and path and existing.get("path") == path:
+                raise CommandError(["incus"], 1, b"path is already in use")
+
+    def create(self, argv: list[str]) -> None:
+        options = list(zip(argv, argv[1:], strict=False))
+        devices = {}
+        for flag, value in options:
+            if flag == "-d":
+                device, *items = value.split(",")
+                devices[device] = dict(item.split("=", 1) for item in items)
+        self.data = {
+            "name": argv[3].removeprefix("local:"),
+            "status": "Stopped",
+            "type": "virtual-machine" if "--vm" in argv else "container",
+            "ephemeral": "--ephemeral" in argv,
+            "config": dict(v.split("=", 1) for f, v in options if f == "-c"),
+            "devices": devices,
+        }
+
+    def run(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        self.calls.append(argv)
+        for prefix, stderr in self.fail.items():
+            if " ".join(argv).startswith(prefix):
+                raise CommandError(argv, 1, stderr)
+        stdout = b""
+        if argv[:2] == ["incus", "create"]:
+            self.create(argv)
+        elif argv[:3] == ["incus", "query", "local:/1.0/profiles/default"]:
+            stdout = json.dumps({"devices": {"root": self.profile_root}}).encode()
+        elif argv[:3] == ["incus", "query", "local:/1.0/storage-pools/default"]:
+            stdout = json.dumps({"driver": "btrfs"}).encode()
+        elif argv[:2] == ["incus", "query"]:
+            if self.data is None:
+                return subprocess.CompletedProcess(
+                    argv, 1, b"", b"Error: Instance not found"
+                )
+            stdout = json.dumps(self.response()).encode()
+        elif self.data is None:
+            raise RuntimeError(f"no instance for {argv}")
+        elif argv[:3] == ["incus", "config", "set"]:
+            self.data["config"].update(item.split("=", 1) for item in argv[4:])
+        elif argv[:4] == ["incus", "config", "device", "remove"]:
+            del self.data["devices"][argv[5]]
+        elif argv[:4] == ["incus", "config", "device", "add"]:
+            if argv[5] in self.data["devices"]:
+                raise CommandError(argv, 1, b"device already exists")
+            device = {"type": argv[6], **dict(i.split("=", 1) for i in argv[7:])}
+            self.claim_path(argv[5], device.get("path"))
+            self.data["devices"][argv[5]] = device
+        elif argv[:4] == ["incus", "config", "device", "set"]:
+            values = dict(item.split("=", 1) for item in argv[6:])
+            self.claim_path(argv[5], values.get("path"))
+            self.data["devices"][argv[5]].update(values)
+        elif argv[:4] == ["incus", "config", "device", "override"]:
+            root = self.data["devices"].setdefault("root", {})
+            root.update(item.split("=", 1) for item in argv[6:])
+        elif argv[:2] == ["incus", "start"]:
+            self.data["status"] = "Running"
+        elif argv[:3] == ["incus", "exec", "-T"]:
+            command = argv[argv.index("--") + 1 :]
+            if command == ["readlink", "-f", "/run/current-system"]:
+                stdout = b"system\n"
+            elif command == ["cat", "/proc/mounts"]:
+                stdout = "".join(
+                    f"source {device['path']} none rw 0 0\n"
+                    for device in self.data["devices"].values()
+                    if device.get("path")
+                ).encode()
+            else:
+                raise RuntimeError(f"unexpected guest command: {argv}")
+        else:
+            raise RuntimeError(f"unexpected Incus command: {argv}")
+        return subprocess.CompletedProcess(argv, 0, stdout, b"")
+
+
+def install_fake(
+    deploy: dict[str, Mock], monkeypatch: pytest.MonkeyPatch, fake: FakeIncus
+) -> None:
+    runner = Mock(spec=Runner)
+    runner.run.side_effect = fake.run
+    provider = IncusProvider(runner)
+    # Resolve reads the fake's current state, so tests may adjust it first.
+    deploy["resolve"].side_effect = lambda *args, **kwargs: provider.inspect("test-dev")
+    monkeypatch.setattr("nixant.cli.IncusProvider", lambda runner: provider)
+    monkeypatch.setattr("nixant.cli.can_skip", can_skip)
+
+
 @pytest.fixture
 def running_deploy(
     deploy: dict[str, Mock], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -256,57 +361,61 @@ def running_deploy(
             "unrelated": dict(UNRELATED),
         },
     }
-    runner = Mock(spec=Runner)
-
-    def claim_path(device: str, path: str | None) -> None:
-        # Incus refuses two disk devices mounted at the same guest path.
-        for other, existing in data["devices"].items():
-            if other != device and path and existing.get("path") == path:
-                raise CommandError(["incus"], 1, b"path is already in use")
-
-    def run(argv, **kwargs):
-        stdout = b""
-        if argv[:2] == ["incus", "query"]:
-            stdout = json.dumps(data).encode()
-        elif argv[:3] == ["incus", "config", "set"]:
-            data["config"].update(item.split("=", 1) for item in argv[4:])
-        elif argv[:4] == ["incus", "config", "device", "remove"]:
-            del data["devices"][argv[5]]
-        elif argv[:4] == ["incus", "config", "device", "add"]:
-            if argv[5] in data["devices"]:
-                raise CommandError(["incus"], 1, b"device already exists")
-            device = {"type": argv[6], **dict(i.split("=", 1) for i in argv[7:])}
-            claim_path(argv[5], device.get("path"))
-            data["devices"][argv[5]] = device
-        elif argv[:4] == ["incus", "config", "device", "set"]:
-            values = dict(item.split("=", 1) for item in argv[6:])
-            claim_path(argv[5], values.get("path"))
-            data["devices"][argv[5]].update(values)
-        elif argv[:2] == ["incus", "start"]:
-            data["status"] = "Running"
-        elif argv[:3] == ["incus", "exec", "-T"]:
-            command = argv[argv.index("--") + 1 :]
-            if command == ["readlink", "-f", "/run/current-system"]:
-                stdout = b"system\n"
-            elif command == ["cat", "/proc/mounts"]:
-                stdout = "".join(
-                    f"source {device['path']} none rw 0 0\n"
-                    for device in data["devices"].values()
-                    if device.get("path")
-                ).encode()
-            else:
-                raise RuntimeError(f"unexpected guest command: {argv}")
-        else:
-            raise RuntimeError(f"unexpected Incus command: {argv}")
-        return subprocess.CompletedProcess(argv, 0, stdout, b"")
-
-    runner.run.side_effect = run
-    provider = IncusProvider(runner)
-    # Resolve reads the fake's current state, so tests may adjust it first.
-    deploy["resolve"].side_effect = lambda *args, **kwargs: provider.inspect("test-dev")
-    monkeypatch.setattr("nixant.cli.IncusProvider", lambda runner: provider)
-    monkeypatch.setattr("nixant.cli.can_skip", can_skip)
+    install_fake(deploy, monkeypatch, FakeIncus(data, {"type": "disk"}))
     return data
+
+
+@pytest.fixture
+def fresh_deploy(
+    deploy: dict[str, Mock], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> FakeIncus:
+    """No instance yet; the default profile inherits a 20GiB root disk."""
+    original = deploy["evaluate"].return_value
+    workspace = replace(original.spec.mounts[0], source=str(tmp_path))
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, mounts=(workspace,))
+    )
+    fake = FakeIncus(None, {"type": "disk", "pool": "default", "size": "20GiB"})
+    install_fake(deploy, monkeypatch, fake)
+    return fake
+
+
+@pytest.mark.parametrize("kind", ["container", "vm"])
+def test_up_creates_with_a_smaller_disk_than_the_profile(
+    deploy: dict[str, Mock], fresh_deploy: FakeIncus, kind: str
+) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, kind=kind, disk_bytes=10 * 2**30)
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    assert fresh_deploy.data is not None
+    assert fresh_deploy.data["status"] == "Running"
+    assert fresh_deploy.data["devices"]["root"] == {"size": str(10 * 2**30)}
+    # Sized at creation: no later override/set of the root device.
+    assert not any(
+        argv[1:3] == ["config", "device"] and "root" in argv
+        for argv in fresh_deploy.calls
+    )
+
+
+def test_up_reports_a_quota_error_at_creation(
+    deploy: dict[str, Mock], fresh_deploy: FakeIncus
+) -> None:
+    original = deploy["evaluate"].return_value
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, disk_bytes=2**50)
+    )
+    fresh_deploy.fail["incus create"] = b"Error: Failed creating instance: quota"
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 1
+    assert "quota" in result.output
+    assert fresh_deploy.data is None
+    assert [argv[:2] for argv in fresh_deploy.calls if argv[1] != "query"] == [
+        ["incus", "create"]
+    ]
+    deploy["activate"].assert_not_called()
 
 
 def test_up_refreshes_workdir_without_switching(

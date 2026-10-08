@@ -108,6 +108,11 @@ class IncusProvider:
         ]
         for key, value in sorted(metadata.items()):
             argv.extend(["-c", f"{key}={value}"])
+        if spec.disk_bytes is not None:
+            # An instance-local root override; the pool is inherited from the
+            # profile. Creating at the profile size first would make a smaller
+            # requested size look like a shrink.
+            argv.extend(["-d", f"root,size={spec.disk_bytes}"])
         self.runner.run(argv)
         for mount in spec.mounts:
             self.ensure_mount(spec.instance_name, mount)
