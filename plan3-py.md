@@ -26,7 +26,7 @@ Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs
 | 7 | Guest user | `nixant.user` with host UID; CLI verifies `uid == os.getuid()` |
 | 8 | `exec` syntax | `nixant exec [-n TARGET] CMD...` |
 | 9 | Readiness | Retry `incus exec -- true`, then `systemctl is-system-running --wait` (running or degraded); ~60s container, ~180s VM |
-| 10 | Ports | Proxy devices listen on `127.0.0.1` unless an address is given |
+| 10 | Ports | Container proxy devices listen on `127.0.0.1` unless an address is given; VM ports are unsupported |
 | 11 | Sizes | Nix normalizes `"4GiB"` etc. to integer bytes |
 | 12 | Ordering | Evaluate and build before touching Incus |
 | 13 | Models | Frozen `dataclasses`; no Pydantic |
@@ -39,7 +39,7 @@ Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs
 | 20 | Concurrency | Per-target lock file for mutating commands |
 | 21 | Distribution | Nix only; package bakes in its own source path and revision |
 | 22 | Version pin | Template keeps an unversioned `nixant.url`; `init` locks it to the CLI's revision via `--override-input` |
-| 23 | Activation bound | No default timeout; `up`/`rebuild --timeout DURATION` for scripts and agents |
+| 23 | Activation bound | Default 30-minute deadline; `up`/`rebuild --timeout DURATION` overrides it; no unlimited CLI mode |
 | 24 | Reboot-required switch | Exit 100 → automatic `incus restart`, then verify and record |
 | 25 | Guest-side Nix | Supported: flakes enabled, user trusted, nesting required (verified) |
 | 26 | `/etc/nixos` | Activation installs a throwing stub; stock files removed |
@@ -243,7 +243,7 @@ Mutating commands (`up`, `rebuild`, `down`, `restart`, `destroy`, `adopt`, `name
 
 ### Untracked-file pre-flight
 
-Before every evaluation (`up`, `rebuild`, `config`): if the root is inside a git work tree, run `git ls-files --others --exclude-standard -- '*.nix' flake.lock` from the root. If anything is listed, warn:
+Before every target evaluation (`up`, `rebuild`, `config`, and `name` when proposing a name automatically): if the root is inside a git work tree, run `git ls-files --others --exclude-standard -- '*.nix' flake.lock` from the root. If anything is listed, warn:
 
 ```text
 warning: Nix ignores files not tracked by git:
@@ -321,7 +321,7 @@ Evaluating a NixOS configuration is the main latency. The external simulation me
 
 - **One evaluation per command.**
   - `up`/`rebuild` use a single `nix eval --json .#nixosConfigurations.<t> --apply 'c: { runtime = …; drvPath = …; }'`. Building by `.drv` path needs no second evaluation.
-  - `config` evaluates only `runtime`, which is lazier than the full system.
+  - `config` and automatic `name` proposals evaluate only `runtime`, which is lazier than the full system. Explicit `name TARGET NAME` and `name TARGET --unset` do not evaluate.
 - **Never silent.** Before evaluating, print `evaluating <target>…`, and pass Nix's stderr (fetch and progress lines) through to the terminal instead of capturing it. A cold first run then shows what it is waiting for.
 - **Eval cache:** Nix's flake eval cache does not apply to `--apply` expressions or dirty git trees. Accepted for Phases 1–2; re-measure early in Phase 1 (see To verify early).
 
@@ -396,9 +396,9 @@ Prints `nixant.runtime` JSON plus the project root, project ID, effective instan
 
 ### `name`
 
-`nixant name [TARGET] [NAME | --unset]` sets this checkout's instance-name override for a target. It does not evaluate and takes the target lock.
+`nixant name [TARGET] [NAME | --unset]` sets this checkout's instance-name override for a target and takes the target lock. Only automatic name proposals evaluate Nix; supplying `NAME` or `--unset` does not evaluate or build.
 
-- **Without `NAME`:** uses `<committed instanceName>-<checkout dir name>`, sanitized, and prints it. No prompt; run again with `NAME` to choose another.
+- **Without `NAME` or `--unset`:** evaluates the target's runtime once to read the committed `nixant.instanceName`, then uses `<committed instanceName>-<checkout dir name>`, sanitized, and prints it. This runs the normal evaluation pre-flight and requires an evaluable configuration. No prompt; run again with `NAME` to choose another.
 - **Where it writes:**
   - In a linked worktree, or a repository with several worktrees: enables `extensions.worktreeConfig` if needed, then `git config --worktree`.
   - Otherwise, the clone's own `git config`.
@@ -526,7 +526,7 @@ Command construction is confined to `providers/incus.py`:
 - Create: `incus create images:nixos/unstable local:NAME -c security.nesting=true -c user.nixant.*…`; add devices; then `incus start local:NAME`. The image is named with its `images:` remote and the destination with `local:`. A bare `local:IMAGE` would search the local image store instead.
 - VM (Phase 3): `--vm -c security.secureboot=false` (image declares `requirements.secureboot=false`).
 - Mounts (containers): `disk source=<abs> path=<target> shift=true [readonly=true]`. If adding with `shift=true` fails, stop with an error. Without shift, files appear as 65534 and are not writable. Verify the mount appeared and retry (see Relation to Incant).
-- Ports: `proxy listen=tcp:<address>:<host> connect=tcp:127.0.0.1:<guest>`.
+- Ports (containers only): `proxy listen=tcp:<address>:<host> connect=tcp:127.0.0.1:<guest>`. VM ports are rejected: Incus requires NAT-mode proxies for VMs, which need a static IPv4 address on the instance NIC that nixant does not manage.
 - Inspect via `incus query /1.0/instances/NAME?recursion=1` (status, type, config, devices, and `state.network` for IPv4 in one call; verified that the single-instance GET with `recursion=1` includes `state`).
 - Lookup via `incus list local: user.nixant.project=<id> user.nixant.target=<t> --format json` (filters AND together; verified).
 
@@ -564,8 +564,9 @@ Recording, based on the `switch-to-configuration` exit status:
    - different → `failed` (`instance did not boot the new system`)
 4. A failed restart leaves `reboot-required`. The skip condition treats it as not ok, so the next `up` re-runs activation, which is a no-op `switch` once the instance has rebooted.
 
-**Interruption and `--timeout`.** No default bound: interactive use streams the output, and the user can press Ctrl-C. `switch-to-configuration-ng` waits for systemd jobs with no timeout of its own, and `Type=oneshot` units have no start timeout by default, so scripts and agents should pass `--timeout DURATION` to `up`/`rebuild`.
+**Interruption and `--timeout`.** `up` and `rebuild` default to a **30-minute activation deadline**. `--timeout DURATION` replaces that deadline; it accepts a finite positive number of seconds, optionally suffixed with `s`, `m`, or `h` (for example `90s`, `5m`, or `1h`). There is no unlimited CLI mode. Interactive use streams the output, and the user can press Ctrl-C. The default prevents indefinite hangs: `switch-to-configuration-ng` waits for systemd jobs with no timeout of its own, and `Type=oneshot` units have no start timeout by default.
 
+- **Scope:** the activation budget covers closure transfer, profile installation, switching, and any exit-100 restart/readiness/current-system verification. Recovery uses the remaining budget, not a fresh deadline. This is not a whole-command timeout: evaluation, host build, creation, reconciliation, and initial start/readiness precede activation.
 - **Ctrl-C or expiry** ends the `incus exec` client. That also kills the guest process (verified), so the switch is aborted midway.
 - **Recovery:** the system profile already points to the new generation, and `activation` stays `pending`, so the next `up` re-runs the switch. That is safe to repeat.
 - **Message:** `--timeout` expiry prints `activation did not finish within <DURATION>; aborted, run nixant up to retry`.
@@ -593,15 +594,15 @@ Run after every start and before activation.
 
 | Field | Container | VM |
 |---|---|---|
-| cpus, memory | live | live (memory may need restart; verify) |
-| disk grow | live (see Root disk) | live (see Root disk) |
+| cpus, memory | live | live |
+| disk grow | live (see Root disk) | stored immediately; guest sees growth after next boot |
 | disk shrink | unsupported → error | unsupported → error |
-| mounts add/change/remove | live | restart (verify hotplug) |
-| ports | live | live (verify NAT-mode requirement) |
+| mounts add/change/remove | live | live (virtiofs hotplug, retarget, and removal) |
+| ports | live | unsupported → error; requires unmanaged static IPv4/NAT-mode setup |
 | kind | recreate → refuse, tell user to destroy | same |
 | user, NixOS config | activation | activation |
 
-`up` applies live changes, prints restart-required changes and applies them only if the instance was stopped, and refuses recreate-required changes.
+`up` refuses recreate-required or unsupported changes before applying the reconciliation change set. It applies live changes and stores restart-required changes in Incus immediately, even while the instance is running. For an instance that was not stopped, it prints that those changes take effect after the next restart and suggests `nixant restart`; it does not restart automatically for reconciliation. For a stopped instance, the subsequent start makes the stored settings effective. VM root-disk growth is the current restart-required setting.
 
 ### Root disk
 
@@ -676,7 +677,7 @@ cpus/memory/disk limits, ports, multiple and read-only mounts, planner with clas
 
 ### Phase 3: VMs
 
-`nixosModules.vm`, secure boot setting, VM readiness timeouts, VM mount/port behavior.
+`nixosModules.vm`, secure boot setting, VM readiness timeouts, live CPU/memory and virtiofs mount changes, and root-disk growth effective after the next boot. VM port forwarding is explicitly unsupported: NAT-mode proxies require static guest IPv4 configuration that nixant does not manage.
 
 ### Phase 4: isolation
 
@@ -762,7 +763,7 @@ Own probes:
 - Clean `incus stop` duration for an idle NixOS container, to confirm the 60s `down` timeout is generous.
 - Exit-100 path in a container: that `switch` updates `/sbin/init` before exiting 100, so `incus restart` boots the new system. Hard to trigger on purpose; try a first activation from an old stock image to current nixpkgs, otherwise cover it with the unit tests only.
 - Root-disk `size` support per storage driver (Phase 2).
-- VM: module name/path for the Incus VM profile, mount hotplug, proxy NAT-mode requirement.
+- VM behavior is resolved for the supported setup: the module imports `virtualisation/incus-virtual-machine.nix`; virtiofs mount hotplug/retarget/removal and CPU/memory limits apply live; root-disk growth needs a subsequent boot. VM ports are rejected because their NAT-mode requirement needs static guest IPv4 configuration outside nixant's scope.
 
 ## Deferred: personalization
 
