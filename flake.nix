@@ -8,6 +8,9 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       python = pkgs.python3;
+      # Canonical location generated projects depend on. Only clean builds
+      # declare it: they have a revision to pin the project's lock to.
+      flakeUrl = "github:jasalt/nixant-py";
     in {
       packages.${system}.default = python.pkgs.buildPythonApplication {
         pname = "nixant";
@@ -21,7 +24,7 @@
         makeWrapperArgs = [
           "--set NIXANT_SELF ${self}"
           "--set NIXANT_REV '${self.rev or ""}'"
-        ];
+        ] ++ pkgs.lib.optional (self ? rev) "--set NIXANT_FLAKE_URL ${flakeUrl}";
         meta.mainProgram = "nixant";
       };
 
