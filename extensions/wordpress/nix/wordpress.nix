@@ -159,8 +159,71 @@ in {
         }
       ];
     }
-    # Services and setup (reading config.nixant) go here behind hasNixant, so
-    # a missing nixant module fails on the assertion above, not on a lookup.
-    (lib.mkIf hasNixant { })
+    # Everything below reads config.nixant, so it stays behind hasNixant: a
+    # missing nixant module then fails on the assertion above, not on a lookup.
+    (lib.mkIf hasNixant (
+      let
+        user = config.nixant.user.name;
+        group = config.users.users.${user}.group;
+        root = "/var/lib/wordpress";
+        pool = config.services.phpfpm.pools.wordpress;
+      in {
+        # PHP-FPM, Caddy and the setup unit all run as the nixant user, so the
+        # idmapped workspace mount is readable and writable without extra groups.
+        systemd.tmpfiles.rules = [ "d ${root} 0750 ${user} ${group} - -" ];
+
+        # unix_socket authentication: the database user is the nixant user and
+        # has no password.
+        services.mysql = {
+          enable = true;
+          package = pkgs.mariadb;
+          ensureDatabases = [ "wordpress" ];
+          ensureUsers = [{
+            name = user;
+            ensurePermissions."wordpress.*" = "ALL PRIVILEGES";
+          }];
+        };
+
+        services.phpfpm.pools.wordpress = {
+          inherit user group;
+          phpPackage = cfg.phpPackage;
+          phpOptions = ''
+            upload_max_filesize = 64M
+            post_max_size = 64M
+            memory_limit = 512M
+          '';
+          settings = {
+            "listen.owner" = user;
+            "listen.group" = group;
+            "listen.mode" = "0660";
+            "pm" = "dynamic";
+            "pm.max_children" = 8;
+            "pm.start_servers" = 2;
+            "pm.min_spare_servers" = 1;
+            "pm.max_spare_servers" = 3;
+            "catch_workers_output" = true;
+          };
+        };
+
+        # Reload goes through the admin API, which is off.
+        services.caddy = {
+          enable = true;
+          inherit user group;
+          enableReload = false;
+          globalConfig = "admin off";
+          virtualHosts.":80".extraConfig = ''
+            root * ${root}
+            encode gzip
+            php_fastcgi unix/${pool.socket}
+            file_server
+          '';
+        };
+
+        services.mailpit.instances.wordpress = {
+          listen = "127.0.0.1:${toString cfg.mailpit.uiPort}";
+          smtp = "127.0.0.1:${toString cfg.mailpit.smtpPort}";
+        };
+      }
+    ))
   ]);
 }

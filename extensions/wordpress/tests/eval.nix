@@ -33,7 +33,8 @@ let
     let messages = failures args;
     in messages != [] && lib.all (message: lib.hasInfix needle message) messages;
 
-  base = (evaluate {}).config.wordpress;
+  base_ = evaluate {};
+  base = base_.config.wordpress;
   tests = {
     validConfigBuilds = valid {};
     disabledNeedsNothing = succeeds (evaluate {
@@ -42,6 +43,22 @@ let
     }).config.system.build.toplevel.drvPath;
     urlDerivedFromPort = base.url == "http://localhost:8081";
     urlExplicitWins = (evaluate { extra.wordpress.url = "http://localhost:9000"; }).config.wordpress.url == "http://localhost:9000";
+    servicesExist = let c = base_.config; in
+      c.services.mysql.enable && c.services.caddy.enable
+      && c.services.phpfpm.pools ? wordpress && c.services.mailpit.instances ? wordpress;
+    poolRunsAsNixantUser = let c = base_.config; in
+      c.services.phpfpm.pools.wordpress.user == "dev" && c.services.caddy.user == "dev";
+    databaseUserIsNixantUser = (builtins.head base_.config.services.mysql.ensureUsers).name == "dev";
+    caddyServesWordpress = let site = base_.config.services.caddy.virtualHosts.":80".extraConfig; in
+      lib.hasInfix "root * /var/lib/wordpress" site && lib.hasInfix "/run/phpfpm/wordpress.sock" site;
+    caddyAdminOff = lib.hasInfix "admin off" base_.config.services.caddy.globalConfig
+      && !base_.config.services.caddy.enableReload;
+    mailpitPorts = let m = base_.config.services.mailpit.instances.wordpress; in
+      m.listen == "127.0.0.1:8025" && m.smtp == "127.0.0.1:1025";
+    mailpitPortsConfigurable = let m = (evaluate { extra.wordpress.mailpit = { uiPort = 9025; smtpPort = 9026; }; }).config.services.mailpit.instances.wordpress; in
+      m.listen == "127.0.0.1:9025" && m.smtp == "127.0.0.1:9026";
+    stateDirectoryRule = lib.elem "d /var/lib/wordpress 0750 dev dev - -" base_.config.systemd.tmpfiles.rules;
+    nothingWhenDisabled = !(evaluate { extra.wordpress.enable = lib.mkForce false; }).config.services.caddy.enable;
     defaultsAreDevelopmentOnly = base.admin.user == "admin" && base.wpConfig.WP_DEBUG_DISPLAY == false;
 
     missingNixant = fails "nixant options are missing" { withNixant = false; extra.wordpress.url = "http://localhost:8081"; };
