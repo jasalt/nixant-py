@@ -1,260 +1,227 @@
-## Verdict
+# Plan: devenv layer and WordPress example
 
-**Feasible, and a good match for nixant’s current architecture.** A single nixant project can already manage multiple named NixOS targets, each with its own container and workspace mount.
+## Goal
 
-I would revise the earlier proposal in two important ways:
+1. Ship devenv support in nixant as a reusable NixOS module plus a `devenv` template.
+2. Add `examples/devenv-wordpress/`, a single-site WordPress example built on that module, with a
+   mutable WordPress root on the workspace mount that is shared between host and guest.
 
-1. **Layer reusable modules, not successive template invocations.** Templates scaffold projects; they are not an inheritance or upgrade mechanism.
-2. **Keep a small shared site declaration.** Removing `client.nix` outright would duplicate ports between NixOS and devenv, since these are separate evaluations.
+Inspired by `../wp-devenv-workspace/`, but modular: nixant provides the container and the devenv
+layer; the example contains only WordPress specifics.
 
-The basic design needs little or no CLI work. The main work is packaging, integration testing, and defining state and repository boundaries.
+## Relation to nixant-wp
 
-## 1. What already works
+`../nixant-wp` is a separate repository with a NixOS-based WordPress setup that does not use
+devenv. It is a NixOS module plus template: native MariaDB/PHP-FPM/Caddy/Mailpit units built on
+the host, setup run by `nixant up`, a shared `public/` web root, existing-site import and its own
+tests. It is the WordPress solution; this example is not a competitor to it.
 
-The current implementation supports the necessary building blocks:
+`examples/devenv-wordpress` exists to demonstrate the devenv layer with a familiar stack. Keep the
+two distinct:
 
-| Requirement | Current support |
-|---|---|
-| Multiple containers from one flake | Multiple `nixosConfigurations.<target>` |
-| Independent lifecycle operations | `up`, `rebuild`, `shell`, `destroy`, etc. accept targets |
-| Per-target ownership and operation locking | Already implemented |
-| Mount only one site into each container | Override `nixant.mounts.workspace.source` |
-| Relative site paths | Resolved relative to the enclosing nixant project root |
-| Different host ports per site | `nixant.ports` |
-| Read-only shared modules | Additional read-only mounts |
-| List existing project instances | `nixant status` |
+| | nixant-wp | examples/devenv-wordpress |
+|---|---|---|
+| Purpose | WordPress environment for client projects | Demo of `nixosModules.devenv` |
+| Stack declared in | NixOS module (`nix/site.nix`) | Project `devenv.nix` |
+| Built | On the host, by nixant | In the guest, by devenv |
+| Services start | `nixant up` (systemd units) | `devenv up -d` (manual) |
+| WP setup | On every `nixant up`, converges DB settings and URL | One idempotent devenv task, creates only |
+| Web root | `public/` | `wordpress/` |
+| Lives in | Own repo, depends on nixant | nixant repo |
 
-For example, each target can contain:
+Rules:
 
-```nix
-nixant = {
-  instanceName = "wp-client-a";
+- No dependency in either direction: the example does not import nixant-wp modules, and nixant-wp
+  does not use `nixosModules.devenv`. nixant itself never depends on nixant-wp.
+- Do not grow the example toward nixant-wp features (existing-site import, rewriting `wp-config.php`,
+  URL convergence, multi-site). Requests for those go to nixant-wp.
+- Use different default ports and instance names so both can run side by side
+  (nixant-wp's template forwards 8081 and 8025).
+- The example README says in its first paragraph that it demonstrates devenv in nixant, and points
+  to nixant-wp for a NixOS-native WordPress setup without devenv.
 
-  mounts.workspace = {
-    source = "sites/client-a";  # String, not ./sites/client-a
-    target = "/workspace";
-  };
+### Non-goals (first version)
 
-  ports = [
-    { host = 8081; guest = 8081; }
-    { host = 8025; guest = 8025; }
-  ];
-};
-```
+- Multi-site/multi-client workspaces, a cross-target port helper, `client.nix`/`site.nix` split.
+- A reusable WordPress devenv module (the 22 KB `wordpress.nix` stays in wp-devenv-workspace).
+- Repository layout decisions (monorepo vs. site repos, submodules, submodule checks).
+- Anything nixant-wp already covers (see above).
+- Production import, `.test` DNS / host-name virtual hosts, port 80 (and its sysctl).
+- Automatic `devenv up` at boot, health reporting, bulk commands.
+- VM targets: nixant rejects forwarded ports on VMs (`planner.py`), so the example is container-only.
 
-**The workspace override is essential.** Keeping the default `"."` source would expose the entire consolidated checkout—including sibling sites—to every container.
-
-These details are supported by `nix/modules/options.nix` and `src/nixant/project.py`, rather than requiring new functionality.
-
-## 2. Recommended structure
-
-I would separate the design into three layers:
-
-```text
-nixant
-  Container lifecycle, mounts, users, resources, port forwarding
-    │
-    └── generic devenv guest module
-          Installs the devenv CLI and basic tools
-            │
-            └── WordPress workspace
-                  Site declarations and reusable devenv WordPress module
-```
-
-A consolidated project could look like:
+## Layers
 
 ```text
-wp-workspace/
-├── flake.nix
-├── flake.lock
-├── nix/
-│   └── devenv-guest.nix
-├── shared/
-│   └── wordpress-devenv/
-└── sites/
-    ├── client-a/
-    │   ├── client.nix
-    │   ├── devenv.nix
-    │   ├── devenv.yaml
-    │   ├── devenv.lock
-    │   ├── site.nix
-    │   ├── plugins/
-    │   └── themes/
-    └── client-b/
-        └── ...
+nixant.nixosModules.container     lifecycle, mounts, user, resources, ports (exists)
+  └── nixant.nixosModules.devenv  devenv CLI, cache config (new)
+        ├── templates/devenv      generic starter project (new)
+        └── examples/devenv-wordpress
+                                  WordPress devenv.nix + mutable ./wordpress root (new)
 ```
 
-The root flake creates `client-a` and `client-b` targets using a small Nix helper. Each imports the same guest module but mounts only its own site.
+Layering happens by importing modules, not by running templates on top of each other.
+`nixant init` writes nothing when `flake.nix` already exists; it only prints a snippet.
 
-Usage would be:
+nixant does not know about devenv processes or WordPress. `nixant up` starts the box;
+`devenv up` (inside the guest) starts the application.
 
-```sh
-nixant up client-a
-nixant up client-b
+## A. `nixosModules.devenv`
 
-nixant shell client-a
+New file `nix/modules/devenv.nix`, exported from `flake.nix` next to `container`/`vm`/`options`.
+Importing the module enables it; there is no option.
 
-# Or run application operations from the host:
-nixant exec --target client-a -- devenv up -d
-nixant exec --target client-a -- devenv tasks run site:setup
+Contents:
 
-nixant status
-```
+- `environment.systemPackages = [ pkgs.devenv pkgs.git ]` (and `direnv` if useful).
+- System-wide cache configuration, so devenv works under `isolation = "agent"`, where the user is
+  not a trusted Nix user and cannot add substituters itself:
 
-There is no need to make nixant understand WordPress or devenv processes.
-
-## 3. How template layering should work
-
-The earlier suggestion could imply:
-
-```sh
-nixant init devenv
-nixant init wordpress
-```
-
-That is **not how the current initializer works**. When `flake.nix` exists, `init` prints a merge snippet and writes nothing.
-
-Instead:
-
-- **`devenv` template:** complete minimal project using a reusable guest module.
-- **`wordpress` or `wordpress-workspace` template:** complete project using that same guest module, plus WordPress declarations.
-- **Reusable WordPress devenv module:** maintained separately from generated site files.
-
-This makes the layering real at the module level, rather than relying on copying one template over another.
-
-For maintainability, I would start with a generic template in nixant and a WordPress workspace example or external template. The sizable WordPress provisioning/task implementation need not become part of nixant itself.
-
-Also, the correct existing syntax is **`nixant init devenv`**, not the `-t` form in my previous answer.
-
-## 4. Retain a common source for ports
-
-My earlier recommendation to remove `client.nix` was too strong.
-
-The current WordPress arrangement already solves a useful problem:
-
-- Host configuration needs instance identity and forwarded ports.
-- devenv needs the public WordPress URL and service ports.
-- Both can import the same plain Nix data.
-
-Keep that pattern:
-
-```nix
-# sites/client-a/client.nix
-{
-  instance = "wp-client-a";
-  ports = {
-    http = 8081;
-    mailpit = 8025;
+  ```nix
+  nix.settings = {
+    substituters = [ "https://devenv.cachix.org" ];
+    trusted-public-keys = [ "devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=" ];
   };
-}
+  ```
+
+  (Verify the key against devenv's docs when implementing.) Do **not** add the user to
+  `trusted-users` to silence warnings.
+
+Tests: add a case to `nix/tests/options.nix` or `templates.nix` that the module evaluates with and
+without `isolation = "agent"`, and that `trusted-users` stays without the user under agent.
+
+## B. `devenv` template
+
+`nix/templates/devenv/`:
+
+```text
+flake.nix        # like default, modules = [ container devenv ./nix/dev.nix ]
+nix/dev.nix      # stateVersion, extra packages
+devenv.nix       # minimal: packages = [ pkgs.git ]; enterShell hint
+devenv.yaml      # nixpkgs input only
+.gitignore       # .devenv/ .devenv.flake.nix devenv.local.nix
 ```
 
-The root flake imports it to configure nixant; `site.nix` imports it to configure WordPress.
+`devenv.lock` is not shipped; it is created in the guest on first `devenv shell`/`up` and should be
+committed by the user.
 
-For the first version, preserving the existing **host port = guest port** convention is simplest. Separating public and internal ports is possible later, but the existing WordPress module uses `wordpress.url` as a Caddy virtual-host address, so it is not just a port-forwarding change.
+Required alongside:
 
-Two caveats:
+- `nix/snippets/devenv.nix`: `init` errors with "has no snippet" without it.
+- `flake.nix` `templates.devenv` entry: "Default container plus devenv".
+- `nix/tests/templates.nix`: add `"devenv"` to `names`; assert `hasPackage "devenv" "devenv"`.
+- README: template list and the "Other NixOS modules can build on nixant" section.
 
-- nixant checks duplicate host ports **within a target**, not across all targets. A workspace helper should validate uniqueness across sites.
-- The WordPress module uses devenv’s port allocation facilities. Externally forwarded services must stay on their declared ports; an automatically shifted Mailpit port would leave the Incus proxy pointing at the wrong listener. This needs a runtime test.
+## C. `examples/devenv-wordpress/`
 
-## 5. Repository consolidation is a separate decision
+```text
+flake.nix        # imports container + devenv; instanceName, ports
+nix/dev.nix
+ports.nix        # { http = 8090; mailpit = 8026; } plain data, imported by flake.nix and devenv.nix
+devenv.nix       # php-fpm, mariadb, caddy, mailpit, wp-cli, one setup task
+devenv.yaml
+.gitignore       # .devenv/ .devenv.flake.nix devenv.local.nix wordpress/
+README.md
+wordpress/       # mutable WP root, created on first setup (not committed)
+```
 
-There are two viable arrangements.
+Ports use host = guest and differ from nixant-wp's defaults (8081, 8025). The instance name is
+`devenv-wordpress-dev`. nixant's proxy connects to `127.0.0.1:<guest>` in the guest
+(`planner.py`), so services bind to loopback. Fixed ports are fine in a dedicated container;
+do not rely on devenv's port allocation for forwarded services (a shifted port would leave the
+proxy pointing at nothing).
 
-### A. One repository containing all sites
+### devenv.nix outline
 
-**Simplest for shared configuration and evaluation.**
+- `languages.php`: `mysqli`, `gd`, `zip`, `exif` (+ `xdebug` optional); one fpm pool.
+  php-fpm runs as the dev user, so uploads and plugin installs are owned by the user. No
+  www-data ownership problems.
+- `services.mysql`: MariaDB on fixed `127.0.0.1:3306`, database/user `wordpress`.
+- `services.caddy`: `http://:${ports.http}` with `root * ${config.devenv.root}/wordpress`,
+  `php_fastcgi` to the fpm socket, `file_server`.
+- `services.mailpit`: UI on `ports.mailpit`; PHP `sendmail_path` to mailpit.
+- `packages = [ pkgs.wp-cli ]`.
+- `tasks."wordpress:setup"` (idempotent, never destructive):
+  1. `wp core download --path=wordpress --version=<pinned>` only if `wordpress/wp-load.php` is missing.
+     Never `--force`.
+  2. `wp config create` only if `wordpress/wp-config.php` is missing. `DB_HOST=127.0.0.1:3306`.
+  3. `wp core install` only if `wp core is-installed` fails.
 
-- One root flake imports site declarations directly.
-- Shared WordPress module updates can affect all sites in one commit.
-- Each container still mounts only its site.
-- Sites lose some independent-clone convenience.
+After setup, `wordpress/` belongs to the user: edited from the host IDE, changed by WP itself
+(updates, plugins, uploads) inside the guest. The example does not converge plugins or themes.
 
-The shared module can be mounted read-only into each guest at a stable path. Site `devenv.nix` then needs an explicit import arrangement that works there; a relative import into a parent directory will not work if only the site directory is mounted.
+### Usage (README)
 
-### B. One orchestration repository, independent site repositories
+```sh
+cd examples/devenv-wordpress
+nixant up
+nixant exec -- devenv up -d
+nixant exec -- devenv tasks run wordpress:setup
+# http://127.0.0.1:8090, mail UI http://127.0.0.1:8026
+```
 
-**Closest to the existing workspace.**
+Use `nixant exec --target <t> -- …` for other targets.
 
-- The orchestration repository tracks container configuration.
-- Site repositories retain their own code, devenv declarations and locks.
-- Mount sources can refer to local site checkouts without including them in the root flake source.
+### Shared-root considerations
 
-However, **a filesystem mount reference is not the same as a Nix import**: a root flake cannot simply import declarations from ignored nested repositories and expect Git-based flake evaluation to include them.
+- **Flake evaluation copies the source.** The CLI evaluates `.#nixosConfigurations`. In a git work
+  tree only tracked files are copied, so `wordpress/` and `.devenv/` (MariaDB data) must be
+  gitignored. Outside git, the whole directory, including the WP tree and the database, would be
+  copied into the store on every evaluation. The README should say to keep the project in git.
+  If the user wants a custom theme/plugin under version control, un-ignore only that path.
+- **UID.** Mounts use `shift=true`, and deploy already rejects `nixant.user.uid != host uid`, so
+  host and guest see the same owner. Nothing extra is needed.
+- **Run devenv only in the guest.** `.devenv/` holds guest store paths, GC roots and the MariaDB
+  data dir. Running devenv on the host in the same directory conflicts. Editing files from the
+  host is fine.
+- **wp-config.php contains guest-side values** (`127.0.0.1:3306`, absolute `/workspace/...` paths
+  if any). Host-side `wp` commands are unsupported; run `wp` through `nixant exec`.
 
-Options include keeping host declarations in the orchestration repository, using explicit inputs, or deliberately configuring submodule-aware sourcing.
+## Runtime semantics to document
 
-There is another practical trap: making entire sites Git submodules often leaves their `.git` files pointing into the parent repository’s `.git/modules`. Mounting only the site into the guest can break Git and the WordPress submodule-check task. Avoid solving that by exposing all parent Git metadata to every guest.
+- **Builds happen in the guest.** nixant builds the NixOS system on the host. devenv evaluates and
+  realises PHP/MariaDB/Caddy inside the guest, with its own `devenv.lock`, store usage and
+  first-start latency. The outer `flake.lock` does not pin devenv's inputs.
+- **State lives on the mount.** WordPress files and MariaDB data are under the workspace, so they
+  survive `destroy` + `up`. Container snapshots do **not** include them; back up with
+  `wp db export` and the `wordpress/` directory.
+- **Lifecycle.** `devenv up -d` processes do not restart after a container restart; start them
+  again after `nixant up`. Autostart via a systemd user unit is a later, opt-in enhancement.
+- **Isolation.** The example should work under `nixant.isolation = "agent"`: workspace is the only
+  writable mount, ports are loopback, no sudo. Agent defaults are 2 CPUs / 4 GiB; check that the
+  first devenv build and MariaDB fit, and document overrides if not.
+- **Network.** Separate containers do not imply network isolation between them.
 
-**Recommendation:** use a monorepo for the simplest demonstration; preserve standalone site clones if independent repositories are a requirement. Do not make nested-site submodules the default without testing their guest-visible Git layout.
+## Testing
 
-## 6. Runtime issues the template must address
+Static (`nix flake check`):
 
-### Guest-side builds remain necessary
+- devenv template evaluates, builds and passes assertions; snippet and markers present.
+- `examples/devenv-wordpress` evaluates to a container with the expected ports and mounts.
+  Like `examples/basic`, a committed `flake.lock` must use nixant's nixpkgs revision. Prefer
+  evaluation-only tests here (no golden `runtime.json`) to keep maintenance low.
 
-nixant builds the NixOS system on the host. Installing `pkgs.devenv` does **not** prebuild each site’s PHP, MariaDB and shell environment.
+Runtime (manual first, integration test later):
 
-Those are evaluated and realised by devenv inside each guest, with their own:
+- [ ] `nixant up` of the devenv template and of the example, with and without `isolation = "agent"`.
+- [ ] First `devenv up` in the guest uses caches without the user being trusted.
+- [ ] `wordpress:setup` is idempotent: a second run changes nothing; it never overwrites edits.
+- [ ] HTTP and Mailpit reachable from the host via the forwards; WP mail shows up in Mailpit.
+- [ ] A host-side edit in `wordpress/wp-content` is served immediately; guest-created files are
+      host-owned.
+- [ ] Site and database survive `nixant destroy` + `nixant up`.
+- [ ] After a container restart, `devenv up -d` is needed again (documented).
 
-- Nix store usage;
-- downloads and cache configuration;
-- `devenv.lock`;
-- first-start latency.
+## Work breakdown (beads)
 
-This is a valid trade-off, but should be documented. One outer `flake.lock` does not automatically consolidate every site’s devenv dependencies.
+1. `nixosModules.devenv` + tests.
+2. `devenv` template + snippet + template tests + README.
+3. `examples/devenv-wordpress` + README + flake check coverage.
+4. Runtime validation of the checklist above (agent and non-agent).
 
-### State and snapshot semantics
+Later (deferred):
 
-The existing WordPress module stores WordPress and MariaDB state under devenv state, normally within the mounted checkout.
-
-That means:
-
-- container replacement can preserve site state;
-- a container snapshot does **not** back up the externally mounted site state;
-- running the same checkout’s devenv stack on both host and guest can cause state conflicts and stale absolute paths/store references.
-
-The initial policy should be: **run a site’s devenv environment only inside its assigned guest**, and use explicit database dumps/state backups.
-
-Moving state into the guest is possible, but changes persistence and the existing host-side production-import scripts.
-
-### Service lifecycle
-
-Keep these distinct:
-
-- `nixant up`: start/configure the box;
-- `devenv up`: start application services.
-
-Detached devenv processes should not be assumed to restart after a container reboot. Automatic startup could later be an opt-in systemd integration, not an implicit property of the template.
-
-### Privileges and networking
-
-- Test devenv under `nixant.isolation = "agent"` without making the user a trusted Nix user merely to suppress cache warnings.
-- Prefer high HTTP ports initially. The existing WordPress role explicitly adjusts a sysctl for unprivileged Caddy on port 80; installing devenv alone does not reproduce that.
-- Keep `.test` DNS optional and host-managed.
-- Use containers for this first version: nixant currently rejects forwarded ports for VM targets.
-- Separate containers and mounts do not imply network isolation between clients.
-
-## 7. Suggested scope
-
-| Deliverable | Assessment |
-|---|---|
-| Generic devenv template | Small, straightforward addition |
-| Two-site WordPress workspace example | Feasible with existing target/mount support |
-| Shared WordPress module distribution | Requires an explicit pinning/import policy |
-| Automatic app startup and health reporting | Separate enhancement |
-| Bulk `up`/`down` or site-generation commands | Convenience features, not prerequisites |
-
-Before calling it supported, I would validate a two-site example that demonstrates:
-
-- both containers can run simultaneously;
-- neither sees the other’s source;
-- Git/submodule checks work inside each guest;
-- both HTTP and Mailpit forwards work;
-- state survives container recreation as documented;
-- reboot behaviour is explicit;
-- the intended agent-isolation profile can build and run the stack.
-
-**Bottom line:** proceed with a generic devenv template and a two-target WordPress workspace proof of concept. Consolidate orchestration first; do not couple that to consolidating every repository, dependency lock, and application lifecycle at once.
-
-This was a source review only—no files changed, and no runtime feasibility tests were performed.
+- Multi-site workspace with devenv (multiple targets, one mount per site, cross-target port
+  check). Only if there is demand beyond what nixant-wp's one-repo-per-client model covers.
+- Opt-in devenv autostart as a systemd user service.
+- Separate host and guest ports for WordPress, which requires URL handling in WP.
