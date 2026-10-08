@@ -151,4 +151,11 @@ $ nix flake check
 
 `nix flake check` evaluates every template and `examples/basic` through their own `flake.nix` down to the system derivation. The example is evaluated with the inputs from its committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh it with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` in `examples/basic`.
 
-Integration tests need a disposable Incus environment and run with `NIXANT_INTEGRATION=1`.
+Integration tests need a disposable Incus environment. Plain `pytest` only collects `tests/unit`, so name the directory and opt in explicitly:
+
+```console
+$ NIXANT_INTEGRATION=1 pytest tests/integration          # everything, including VMs
+$ NIXANT_INTEGRATION=1 pytest tests/integration -k "not vm"
+```
+
+They create instances named `nixit-*` and delete them afterwards. `test_init_lock.py` builds the package and locks generated projects without creating instances. `NIXANT_IT_NIXPKGS` (for example `github:NixOS/nixpkgs/nixos-26.05`) runs the scenarios against another guest nixpkgs.

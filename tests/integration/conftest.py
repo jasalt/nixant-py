@@ -33,20 +33,20 @@ class Project:
     created: list[str] = field(default_factory=list)
 
     def nixant(
-        self, *args: str, check: bool = True, timeout: float = 1800
+        self,
+        *args: str,
+        check: bool = True,
+        timeout: float = 1800,
+        input: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        env = {
-            **os.environ,
-            "PYTHONPATH": str(REPO / "src"),
-            "NIXANT_SELF": os.environ.get("NIXANT_SELF", str(REPO)),
-        }
         result = subprocess.run(
-            [sys.executable, "-m", "nixant", *args],
+            nixant_argv(*args),
             cwd=self.root,
-            env=env,
+            env=nixant_env(),
             capture_output=True,
             text=True,
             timeout=timeout,
+            input=input,
         )
         if check and result.returncode != 0:
             raise AssertionError(
@@ -81,8 +81,31 @@ class Project:
         return result.returncode == 0
 
 
+def nixant_argv(*args: str) -> list[str]:
+    """The source CLI, as the tests run it."""
+    return [sys.executable, "-m", "nixant", *args]
+
+
+def nixant_env() -> dict[str, str]:
+    return {
+        **os.environ,
+        "PYTHONPATH": str(REPO / "src"),
+        "NIXANT_SELF": os.environ.get("NIXANT_SELF", str(REPO)),
+    }
+
+
 def git(root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+def commit_all(root: Path) -> None:
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "snapshot")
 
 
 def incus(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:

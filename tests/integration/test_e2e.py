@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -10,7 +11,17 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import Project, cleanup, incus, instance_created_at, new_project
+from .conftest import (
+    Project,
+    cleanup,
+    commit_all,
+    git,
+    incus,
+    instance_created_at,
+    new_project,
+    nixant_argv,
+    nixant_env,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -82,6 +93,46 @@ def test_guest_side_nix_builds(project: Project) -> None:
     assert built.stdout.strip().startswith("/nix/store/")
 
 
+def test_guest_flake_build_and_develop_in_workspace(project: Project) -> None:
+    project.nixant("up")
+    guest = project.root / "guest"
+    guest.mkdir()
+    # The guest registry resolves nixpkgs to the system's own source, and
+    # bash is already in the guest store, so nothing needs the network.
+    (guest / "flake.nix").write_text(
+        """{
+  inputs.nixpkgs.url = "nixpkgs";
+  outputs = { nixpkgs, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+    in {
+      packages.${system}.default = derivation {
+        name = "nixant-workspace";
+        inherit system;
+        builder = "${pkgs.bash}/bin/bash";
+        args = [ "-c" "echo built-in-guest > $out" ];
+      };
+      devShells.${system}.default = pkgs.mkShellNoCC {
+        NIXANT_MARKER = "from-workspace";
+      };
+    };
+}
+"""
+    )
+    git(project.root, "add", "guest/flake.nix")
+    built = project.exec(
+        "nix", "build", "--no-link", "--print-out-paths", "/workspace/guest"
+    )
+    output = built.stdout.strip()
+    assert project.exec("cat", output).stdout.strip() == "built-in-guest"
+    assert (guest / "flake.lock").is_file()  # written through the mount
+    developed = project.exec(
+        "nix", "develop", "/workspace/guest", "-c", "sh", "-c", "echo $NIXANT_MARKER"
+    )
+    assert developed.stdout.strip() == "from-workspace"
+
+
 def test_shell_independence_with_fish(project: Project) -> None:
     project.write_module(
         f"{{ pkgs, ... }}: {{ nixant.user.uid = {os.getuid()}; "
@@ -93,6 +144,15 @@ def test_shell_independence_with_fish(project: Project) -> None:
     assert shell.endswith("/fish")
     assert project.exec("cat", "/etc/nixant-marker").stdout == "fish"
     assert project.exec("bash", "-c", "echo $HOME").stdout.strip() == "/home/dev"
+    # `shell` itself starts fish as a login shell in the workdir; fish reads
+    # the script from stdin because no terminal is attached.
+    entered = project.nixant(
+        "shell",
+        input='echo "fish=$FISH_VERSION"\nstatus is-login; and echo login\npwd\n',
+    )
+    lines = entered.stdout.split()
+    assert lines[0].startswith("fish=") and lines[0] != "fish="
+    assert lines[1:] == ["login", "/workspace"]
 
 
 def test_degraded_service_recovery(project: Project) -> None:
@@ -119,33 +179,75 @@ def test_degraded_service_recovery(project: Project) -> None:
 
 def test_interrupted_import_recovers(project: Project) -> None:
     project.nixant("up")
+    before = project.incus_config("user.nixant.system")
+    # A large, guest-new path keeps the transfer running long enough to
+    # interrupt it while the import is demonstrably in progress.
     project.write_module(
         f"{{ pkgs, ... }}: {{ nixant.user.uid = {os.getuid()}; "
-        "environment.systemPackages = [ pkgs.hello pkgs.cowsay pkgs.figlet ]; }\n"
+        'environment.etc."nixant-payload".source = pkgs.runCommand '
+        '"nixant-payload" {} "head -c 256M /dev/urandom > $out"; }\n'
     )
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(Path(__file__).parents[2] / "src"),
-        "NIXANT_SELF": os.environ.get("NIXANT_SELF", str(Path(__file__).parents[2])),
-    }
-    process = subprocess.Popen(
-        ["python3", "-m", "nixant", "rebuild"],
-        cwd=project.root,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    log = project.root.parent / "interrupted-up.log"
+    with log.open("w") as stderr:
+        process = subprocess.Popen(
+            nixant_argv("up"),
+            cwd=project.root,
+            env=nixant_env(),
+            stdout=subprocess.DEVNULL,
+            stderr=stderr,
+        )
+    importing = f"local:{project.instance} -- nix-store --import"
     deadline = time.monotonic() + 900
-    while time.monotonic() < deadline and process.poll() is None:
-        if project.incus_config("user.nixant.activation") == "pending":
-            process.send_signal(signal.SIGINT)
-            break
+    try:
+        while not running(importing):
+            assert process.poll() is None, log.read_text()
+            assert time.monotonic() < deadline, "the import never started"
+            time.sleep(0.05)
+        process.send_signal(signal.SIGINT)
+        process.wait(timeout=120)
+    finally:
+        if process.poll() is None:
+            process.kill()
+    assert process.returncode != 0
+    assert "activation interrupted; run nixant up to retry" in log.read_text()
+    settle = time.monotonic() + 10
+    while running(importing) and time.monotonic() < settle:
         time.sleep(0.2)
-    process.wait(timeout=120)
-    # Whether interrupted or already finished, a fresh up leaves a good system.
-    project.nixant("rebuild")
+    assert not running(importing)
+    assert project.incus_config("user.nixant.activation") == "pending"
+    assert project.incus_config("user.nixant.system") == before
+    assert "(pending," in project.nixant("status").stdout
+    payload = "/etc/nixant-payload"
+    assert project.exec("test", "-e", payload, check=False).returncode != 0
+
+    # A plain up retries: pending never counts as the current system.
+    project.nixant("up")
     assert project.incus_config("user.nixant.activation") == "ok"
-    assert "figlet" in project.exec("sh", "-c", "ls /run/current-system/sw/bin").stdout
+    assert project.incus_config("user.nixant.system") != before
+    assert project.exec("stat", "-L", "-c", "%s", payload).stdout.strip() == str(
+        256 * 2**20
+    )
+
+
+def running(pattern: str) -> bool:
+    return (
+        subprocess.run(["pgrep", "-f", "--", pattern], capture_output=True).returncode
+        == 0
+    )
+
+
+def test_broken_config_does_not_block_cleanup(project: Project) -> None:
+    project.nixant("up")
+    (project.root / "nix/dev.nix").write_text("{ this is not nix\n")
+    git(project.root, "add", "nix/dev.nix")
+    assert project.nixant("up", check=False).returncode != 0
+    assert project.incus_config("user.nixant.activation") == "ok"
+    # status, down and destroy never evaluate the configuration.
+    assert "RUNNING" in project.nixant("status").stdout.upper()
+    project.nixant("down")
+    assert "STOPPED" in project.nixant("status").stdout.upper()
+    project.nixant("destroy")
+    assert not project.instance_exists()
 
 
 def test_syntax_error_creates_nothing(project: Project) -> None:
@@ -176,13 +278,46 @@ def test_cross_target_same_instance_name(tmp_path: Path) -> None:
         cleanup(project)
 
 
-def with_second_target(text: str) -> str:
-    """Duplicate the template's target as `other`, reusing the same instanceName."""
+def test_cross_target_distinct_names_coexist(tmp_path: Path) -> None:
+    project = new_project(tmp_path, "pair")
+    other = f"{project.instance}-o"
+    project.created.append(other)
+    try:
+        flake = project.root / "flake.nix"
+        flake.write_text(with_second_target(flake.read_text(), other))
+        git(project.root, "add", "flake.nix")
+        project.nixant("up", "dev")
+        project.nixant("up", "other")
+        assert project.instance_exists() and project.instance_exists(other)
+        status = project.nixant("status").stdout
+        assert "target: dev" in status and "target: other" in status
+        assert project.exec("hostname").stdout.strip() == project.instance
+        hostname = project.nixant("exec", "-n", "other", "--", "hostname")
+        assert hostname.stdout.strip() == other
+        assert project.incus_config("user.nixant.target", other) == "other"
+
+        project.nixant("down", "other")
+        assert "RUNNING" in project.nixant("status", "dev").stdout.upper()
+        project.nixant("destroy", "other")
+        assert not project.instance_exists(other)
+        assert project.exec("true").returncode == 0
+    finally:
+        cleanup(project)
+
+
+def with_second_target(text: str, instance: str | None = None) -> str:
+    """Duplicate the template's target as `other`, optionally renaming it."""
     start = text.index("nixosConfigurations.dev = ")
     end = text.index("    };\n", start) + len("    };\n")
     block = text[start:end].replace(
         "nixosConfigurations.dev", "nixosConfigurations.other"
     )
+    if instance is not None:
+        block = re.sub(
+            r'nixant\.instanceName = "[^"]*";',
+            f'nixant.instanceName = "{instance}";',
+            block,
+        )
     return text[:end] + "    " + block + text[end:]
 
 
@@ -303,6 +438,73 @@ def test_name_override_gives_second_checkout_its_own_instance(
     second.nixant("destroy")
     assert not second.instance_exists(chosen)
     assert project.instance_exists()
+
+
+def test_linked_worktree_lifecycle_and_orphans(
+    project: Project, tmp_path: Path
+) -> None:
+    project.nixant("up")
+    commit_all(project.root)
+    linked = tmp_path / "linked"
+    git(project.root, "worktree", "add", "-q", str(linked), "-b", "feature")
+    second = replace(project, root=linked)
+    clash = second.nixant("up", check=False)
+    assert clash.returncode != 0
+    assert "nixant name dev" in clash.stderr + clash.stdout
+
+    chosen = f"{project.instance}-w"
+    project.created.append(chosen)
+    named = second.nixant("name", "dev", chosen)
+    assert "worktree scope" in named.stdout
+    second.nixant("up")
+    assert second.exec("hostname").stdout.strip() == project.instance
+    assert second.incus_config("user.nixant.root", chosen) == str(linked.resolve())
+    assert f"{chosen} (override)" in second.nixant("status").stdout
+    # The main worktree keeps its committed name and its own instance.
+    assert "(override)" not in project.nixant("status").stdout
+    assert project.exec("true").returncode == 0
+
+    second.nixant("down")
+    second.nixant("up")
+    assert second.exec("true").returncode == 0
+
+    git(project.root, "worktree", "remove", "--force", str(linked))
+    orphans = project.nixant("status", "--orphans").stdout
+    assert chosen in orphans and str(linked) in orphans
+    assert f"{project.instance} " not in orphans
+    incus("delete", "--force", f"local:{chosen}")
+    assert chosen not in project.nixant("status", "--orphans").stdout
+
+
+def test_vm_mount_hotplug_and_adopt(tmp_path: Path) -> None:
+    project = new_project(tmp_path, "vmmounts", vm=True)
+    try:
+        project.nixant("up")
+        boot = project.exec("cat", "/proc/sys/kernel/random/boot_id").stdout
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "hello").write_text("hi")
+        project.write_module(
+            f"{{ nixant.user.uid = {os.getuid()}; "
+            f'nixant.mounts.data = {{ source = "{data}"; target = "/data"; }}; }}\n'
+        )
+        project.nixant("up")
+        assert project.exec("cat", "/data/hello").stdout == "hi"
+
+        (project.root / "marker").write_text("kept")
+        moved = tmp_path / "vmmounts-moved"
+        project.root.rename(moved)
+        new = replace(project, root=moved)
+        new.nixant("adopt")
+        assert new.exec("cat", "/workspace/marker").stdout == "kept"
+        new.exec("touch", "/workspace/from-vm")
+        assert (moved / "from-vm").exists()
+        assert new.exec("cat", "/data/hello").stdout == "hi"
+        # Hot-plug and the adopted retarget never rebooted the VM.
+        assert new.exec("cat", "/proc/sys/kernel/random/boot_id").stdout == boot
+        new.nixant("destroy")
+    finally:
+        cleanup(project)
 
 
 def test_vm_lifecycle_and_settings(vm_project: Project) -> None:
