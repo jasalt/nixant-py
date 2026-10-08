@@ -164,6 +164,10 @@ in {
           message = "wordpress.url must start with http:// (TLS is not supported); got '${toString cfg.url}'.";
         }
         {
+          assertion = !(builtins.any (name: builtins.match "[A-Za-z_][A-Za-z0-9_]*" name == null) (builtins.attrNames cfg.wpConfig));
+          message = "wordpress.wpConfig: names must be PHP constant names; got ${bad (builtins.filter (name: builtins.match "[A-Za-z_][A-Za-z0-9_]*" name == null) (builtins.attrNames cfg.wpConfig))}.";
+        }
+        {
           assertion = cfg.activeTheme == null || isSlug cfg.activeTheme;
           message = "wordpress.activeTheme must match ${slug}; got '${toString cfg.activeTheme}'.";
         }
@@ -194,7 +198,7 @@ in {
         # Everything wp-site setup needs; a change reruns the setup unit.
         settingsFile = pkgs.writeText "wordpress-site.json" (builtins.toJSON {
           inherit root;
-          inherit (cfg) title url admin;
+          inherit (cfg) title url admin wpConfig;
           core = "${cfg.package}";
           coreId = builtins.baseNameOf "${cfg.package}";
           db = db // { user = user; };
@@ -204,6 +208,12 @@ in {
       in {
         # PHP-FPM, Caddy and the setup unit all run as the nixant user, so the
         # idmapped workspace mount is readable and writable without extra groups.
+        # `nixant exec -- wp ...` works from any directory: bash -lc reads
+        # /etc/profile, which exports WP_CLI_CONFIG_PATH.
+        environment.systemPackages = [ wpCli wpSite ];
+        environment.etc."wp-cli/config.yml".text = "path: ${root}\n";
+        environment.variables.WP_CLI_CONFIG_PATH = "/etc/wp-cli/config.yml";
+
         systemd.tmpfiles.rules = [ "d ${root} 0750 ${user} ${group} - -" ];
 
         # unix_socket authentication: the database user is the nixant user and

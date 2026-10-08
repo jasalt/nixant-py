@@ -86,6 +86,12 @@ let
       base_.config.services.phpfpm.pools.wordpress.phpOptions;
     mailPortFollowsOption = lib.hasInfix "-S 127.0.0.1:9026"
       (evaluate { extra.wordpress.mailpit.smtpPort = 9026; }).config.services.phpfpm.pools.wordpress.phpOptions;
+    wpConfigInSettings = (settingsOf base_).wpConfig.WP_DEBUG == true
+      && (settingsOf (evaluate { extra.wordpress.wpConfig.WP_HOME_NAME = "x"; })).wpConfig.WP_HOME_NAME == "x";
+    wpCliConfigured = base_.config.environment.variables.WP_CLI_CONFIG_PATH == "/etc/wp-cli/config.yml"
+      && base_.config.environment.etc."wp-cli/config.yml".text == "path: /var/lib/wordpress\n"
+      && lib.any (p: (p.pname or "") == "wp-cli") base_.config.environment.systemPackages;
+    badConstantName = fails "PHP constant names" { extra.wordpress.wpConfig."BAD NAME" = true; };
     nothingWhenDisabled = !(evaluate { extra.wordpress.enable = lib.mkForce false; }).config.services.caddy.enable;
     defaultsAreDevelopmentOnly = base.admin.user == "admin" && base.wpConfig.WP_DEBUG_DISPLAY == false;
 

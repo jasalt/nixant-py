@@ -75,6 +75,14 @@ configure() {
   # Core is managed by Nix; WordPress must not replace it behind its back.
   wp config set AUTOMATIC_UPDATER_DISABLED true --raw
   wp config set WP_AUTO_UPDATE_CORE false --raw
+  # Booleans and integers are written as PHP literals, strings as strings.
+  local key kind value
+  while IFS=$'\t' read -r key kind value; do
+    case "$kind" in
+      boolean | number) wp config set "$key" "$value" --raw ;;
+      *) wp config set "$key" "$value" ;;
+    esac
+  done < <(jq -r '.wpConfig | to_entries[] | [.key, (.value | type), (.value | tostring)] | @tsv' "$WP_SITE_SETTINGS")
 }
 
 wait_for_database() {
@@ -95,7 +103,20 @@ install_site() {
   fi
   wp core install --url="$url" --title="$title" --admin_user="$admin_user" \
     --admin_password="$admin_password" --admin_email="$admin_email" --skip-email
-  wp rewrite structure '/%postname%/'
+}
+
+# Keep home, siteurl and the permalink structure at their configured values,
+# for example after the forwarded host port changed.
+converge_urls() {
+  local option
+  for option in home siteurl; do
+    if [ "$(wp option get "$option")" != "$url" ]; then
+      wp option update "$option" "$url"
+    fi
+  done
+  if [ "$(wp option get permalink_structure)" != '/%postname%/' ]; then
+    wp rewrite structure '/%postname%/'
+  fi
 }
 
 report() {
@@ -115,6 +136,7 @@ setup() {
   configure
   wait_for_database
   install_site
+  converge_urls
   report
 }
 
