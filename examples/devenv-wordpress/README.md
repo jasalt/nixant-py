@@ -6,7 +6,8 @@ declares the application stack, which devenv builds and runs inside the guest. W
 just a familiar stack to demonstrate it with.
 
 For a WordPress development setup without devenv, where the stack is native NixOS services
-built on the host and set up by `nixant up`, use [nixant-wp](../../../nixant-wp) instead. This
+built on the host and set up by `nixant up`, use [nixant-wp](https://github.com/jasalt/nixant-wp) instead
+([nixant-wp-demo](https://github.com/jasalt/nixant-wp-demo) is a site built with it). This
 example stays deliberately small and does not grow its features (existing-site import,
 converging `wp-config.php` or the URL, several sites).
 

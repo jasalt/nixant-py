@@ -82,6 +82,8 @@ Extension modules may read these options. The container and VM modules set `nixa
 
 `nixant.runtime` is internal (the JSON the CLI consumes) and read-only; extension modules should not read or set it. To check that nixant is present, test `options ? nixant` in the module arguments, and read `config.nixant` only behind that.
 
+[nixant-wp](https://github.com/jasalt/nixant-wp) is such an extension, in its own repository: a WordPress module and template that runs MariaDB, PHP-FPM, Caddy and Mailpit as native NixOS services, built on the host and set up by `nixant up`, with the whole site in a project directory shared with the guest. [nixant-wp-demo](https://github.com/jasalt/nixant-wp-demo) is a complete site built with it. Neither uses devenv; they are separate from `nixosModules.devenv` and [`examples/devenv-wordpress`](examples/devenv-wordpress/README.md), which only demonstrates the devenv layer with a WordPress stack.
+
 ## Workflow
 
 ```console
