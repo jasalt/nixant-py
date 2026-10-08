@@ -154,6 +154,15 @@ check_http() {
     || fail admin "GET /wp-admin/ returned '$code' to '$location', expected a redirect to wp-login.php"
 }
 
+# WordPress requesting its own URL, as WP-Cron, Site Health and static
+# exporters do. The guest serves the URL's port and host for this.
+check_loopback() {
+  local code
+  # shellcheck disable=SC2016 # PHP code, expanded by wp eval
+  code=$(wp eval '$r = wp_remote_get( home_url( "/" ), array( "timeout" => 10 ) ); echo is_wp_error( $r ) ? $r->get_error_message() : wp_remote_retrieve_response_code( $r );') || true
+  [ "$code" = 200 ] || fail loopback "WordPress requesting $url/ got '$code', expected 200"
+}
+
 # Send a message through WordPress and find it in Mailpit's API.
 check_mail() {
   local api="http://127.0.0.1:$mailpit_ui_port/api/v1" subject id='' tries=0
@@ -173,7 +182,7 @@ check_mail() {
 check() {
   load_settings
   local step
-  for step in installed http mail; do
+  for step in installed http loopback mail; do
     "check_$step"
     echo "ok: $step"
   done

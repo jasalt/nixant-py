@@ -95,6 +95,17 @@ let
       base_.config.services.caddy.virtualHosts.":80".extraConfig;
     caddyBindsLoopback = lib.hasInfix "bind 127.0.0.1\n" base_.config.services.caddy.virtualHosts.":80".extraConfig
       && (settingsOf base_).httpAddress == "127.0.0.1";
+    # WordPress requests its own URL from inside the guest: serve its port.
+    caddyServesUrlPort = base_.config.services.caddy.virtualHosts.":80".serverAliases == [ ":8081" ];
+    noExtraPortOn80 = (evaluate { extra.wordpress.url = "http://localhost"; })
+      .config.services.caddy.virtualHosts.":80".serverAliases == [];
+    explicitUrlPortServed = (evaluate { extra.wordpress.url = "http://localhost:9000"; })
+      .config.services.caddy.virtualHosts.":80".serverAliases == [ ":9000" ];
+    customHostResolvesToGuest = let system = evaluate { extra.wordpress.url = "http://client.test:8081"; }; in
+      lib.elem "client.test" system.config.networking.hosts."127.0.0.1"
+      && system.config.services.caddy.virtualHosts.":80".serverAliases == [ ":8081" ];
+    localhostNeedsNoHostsEntry = base_.config.networking.hosts
+      == (evaluate { extra.wordpress.enable = lib.mkForce false; }).config.networking.hosts;
     caddyListensEverywhere = let system = evaluate { extra.wordpress.listenAddress = null; }; in
       !(lib.hasInfix "bind " system.config.services.caddy.virtualHosts.":80".extraConfig)
       && (settingsOf system).httpAddress == "127.0.0.1";
@@ -137,6 +148,11 @@ let
     dotsInNamesAllowed = valid { extra.wordpress.root = "sites/v1..2/web"; };
     underivableUrl = fails "cannot be derived" { extra.nixant.ports = lib.mkForce []; };
     nonHttpUrl = fails "must start with http://" { extra.wordpress.url = "https://localhost"; };
+    urlWithPath = fails "without a path" { extra.wordpress.url = "http://localhost:8081/site"; };
+    urlTrailingSlash = fails "without a path" { extra.wordpress.url = "http://localhost:8081/"; };
+    urlBadPort = fails "without a path" { extra.wordpress.url = "http://localhost:99999"; };
+    urlPortTakenByMailpit = fails "Mailpit or MariaDB" { extra.wordpress.url = "http://localhost:8025"; };
+    urlPortTakenByMariadb = fails "Mailpit or MariaDB" { extra.wordpress.url = "http://localhost:3306"; };
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))
   "nixant-wp eval tests failed: ${lib.concatStringsSep ", " (builtins.attrNames (lib.filterAttrs (_: value: !value) tests))}";

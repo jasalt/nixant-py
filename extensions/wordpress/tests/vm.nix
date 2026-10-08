@@ -74,9 +74,12 @@ in pkgs.testers.runNixOSTest {
     machine.succeed("curl -fs -H 'Host: localhost:8081' 'http://127.0.0.1/?vm-mail' | grep -x sent")
     machine.wait_until_succeeds("curl -fs http://127.0.0.1:8025/api/v1/messages | grep -q 'vm fpm mail'", timeout=30)
 
-    # Caddy listens on loopback only, where nixant's port forward connects, and
-    # hides dotfiles and the error log in the project directory.
-    machine.succeed("test \"$(ss -Hltn 'sport = :80' | awk '{print $4}' | sort -u)\" = 127.0.0.1:80")
+    # Caddy listens on loopback only: on port 80, where nixant's port forward
+    # connects, and on the URL's port, where WordPress requests itself.
+    machine.succeed("test \"$(ss -Hltn '( sport = :80 or sport = :8081 )' | awk '{print $4}' | sort -u | paste -sd,)\" = 127.0.0.1:80,127.0.0.1:8081")
+    machine.succeed("curl -fs http://localhost:8081/ | grep vm-plugin")
+
+    # It hides dotfiles and the error log in the project directory.
     machine.succeed("su - dev -c 'echo SECRET=1 > ${site}/.env && echo log > ${site}/wp-content/debug.log'")
     machine.succeed("test \"$(${get "/.env"})\" = 404")
     machine.succeed("test \"$(${get "/wp-content/debug.log"})\" = 404")

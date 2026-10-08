@@ -18,6 +18,18 @@ let
     let web = builtins.filter (port: port.guest == 80) nixantPorts;
     in if web == [] then null else "http://localhost:${toString (builtins.head web).host}";
 
+  # wordpress.url as { host; port; }, or null when it is not http://host[:port].
+  urlParts =
+    let match = if cfg.url == null then null
+      else builtins.match "http://([A-Za-z0-9.-]+)(:([1-9][0-9]*))?" cfg.url;
+    in if match == null then null else {
+      host = builtins.elemAt match 0;
+      port = let port = builtins.elemAt match 2; in if port == null then 80 else lib.toInt port;
+    };
+  # Guest ports the site's URL port must not take over (see the loopback note
+  # on the Caddy site below).
+  reservedPorts = [ cfg.mailpit.uiPort cfg.mailpit.smtpPort 3306 ];
+
   # nixpkgs' wordpress package drops the bundled themes and plugins, which
   # leaves a fresh site without a theme. The upstream tarball has them.
   upstreamCore = pkgs.runCommand "wordpress-core-${pkgs.wordpress.version}" {
@@ -87,9 +99,12 @@ in {
       defaultText = lib.literalExpression ''"http://localhost:<host port forwarded to guest 80>"'';
       example = "http://localhost:8081";
       description = ''
-        Site URL, kept in the home and siteurl options. Derived from the
-        `nixant.ports` entry whose guest port is 80; set it explicitly when
-        there is none.
+        Site URL, `http://<host>[:<port>]` without a path, kept in the home
+        and siteurl options. Derived from the `nixant.ports` entry whose guest
+        port is 80; set it explicitly when there is none. The guest serves the
+        site on this URL's port too and resolves its host to loopback, so
+        WordPress can request its own URL (WP-Cron, Site Health, static
+        exporters).
       '';
     };
 
@@ -133,6 +148,15 @@ in {
         {
           assertion = cfg.url == null || lib.hasPrefix "http://" cfg.url;
           message = "wordpress.url must start with http:// (TLS is not supported); got '${toString cfg.url}'.";
+        }
+        {
+          assertion = cfg.url == null || !(lib.hasPrefix "http://" cfg.url)
+            || (urlParts != null && urlParts.port <= 65535);
+          message = "wordpress.url must be http://<host>[:<port>], without a path or trailing slash (the site is served from /); got '${toString cfg.url}'.";
+        }
+        {
+          assertion = urlParts == null || !(builtins.elem urlParts.port reservedPorts);
+          message = "wordpress.url uses port ${toString (urlParts.port or "")}, which the guest also serves the site on, but Mailpit or MariaDB already uses it in the guest; forward another host port to guest port 80.";
         }
       ];
     }
@@ -203,6 +227,14 @@ in {
         environment.etc."wordpress/site.json".source = settingsFile;
         environment.variables.WP_CLI_CONFIG_PATH = "/etc/wp-cli/config.yml";
 
+        # The URL's host must reach this guest from inside it, too. localhost
+        # and IP addresses need no entry.
+        networking.hosts = lib.mkIf (urlParts != null
+          && urlParts.host != "localhost"
+          && builtins.match "[0-9.]+" urlParts.host == null) {
+          "127.0.0.1" = [ urlParts.host ];
+        };
+
         # unix_socket authentication: the database user is the nixant user and
         # has no password.
         services.mysql = {
@@ -247,6 +279,12 @@ in {
           inherit user group;
           enableReload = false;
           globalConfig = "admin off";
+          # nixant forwards the host port to guest port 80, but WordPress
+          # requests its own URL (WP-Cron, Site Health, static exporters) from
+          # inside the guest, at the URL's port. Serve that port as well; the
+          # bind below keeps it on loopback too.
+          virtualHosts.":80".serverAliases =
+            lib.optional (urlParts != null && urlParts.port != 80) ":${toString urlParts.port}";
           virtualHosts.":80".extraConfig = lib.optionalString (cfg.listenAddress != null) ''
             bind ${cfg.listenAddress}
           '' + ''

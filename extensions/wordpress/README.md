@@ -95,7 +95,7 @@ Every client needs its own `instanceName` and its own host ports.
 | `wordpress.phpPackage` | `pkgs.php` (8.4 at the pinned nixpkgs) | PHP for PHP-FPM and WP-CLI. Override it for another version; it needs mysqli, gd, zip, exif and intl, which nixpkgs' PHP has. |
 | `wordpress.title` | `"WordPress"` | Site title, used at the first install only. |
 | `wordpress.listenAddress` | `"127.0.0.1"` | Guest address the site is served on. nixant's port forward connects to the guest's loopback, so the default keeps the site off the Incus bridge, where other instances could reach it. `null` listens on every interface. |
-| `wordpress.url` | `http://localhost:<host port forwarded to guest 80>` | The URL, kept in the `home` and `siteurl` options. Must be set explicitly when no `nixant.ports` entry has `guest = 80`. `http://` only. |
+| `wordpress.url` | `http://localhost:<host port forwarded to guest 80>` | The URL, `http://<host>[:<port>]` without a path, kept in the `home` and `siteurl` options. Must be set explicitly when no `nixant.ports` entry has `guest = 80`. `http://` only. The port must not be one the guest uses itself (Mailpit's, 3306). |
 | `wordpress.admin.{user,password,email}` | `admin` / `password` / `admin@example.test` | Administrator for the first install. Development-only credentials; they are stored in the Nix store. |
 | `wordpress.mailFrom` | `wordpress@example.test` | Sender for mail whose own sender is not a valid address. WordPress's default `wordpress@localhost` is rejected as invalid, so mail would never reach Mailpit. |
 | `wordpress.mailpit.{uiPort,smtpPort}` | `8025` / `1025` | Guest ports of Mailpit. Forward `uiPort` with `nixant.ports` to read the inbox on the host. |
@@ -129,7 +129,12 @@ Changing `site.nix` and running `nixant up`:
 
 1. WordPress reports an installation;
 2. `/` returns 200 and `/wp-admin/` redirects to the login;
-3. Mailpit's API answers, and a message sent with `wp_mail` shows up in it.
+3. WordPress can request its own URL (`wp_remote_get( home_url() )` returns 200);
+4. Mailpit's API answers, and a message sent with `wp_mail` shows up in it.
+
+### Requests to the site's own URL
+
+WordPress requests its own URL from inside the guest: WP-Cron is spawned that way, Site Health tests it, and static exporters such as Simply Static fetch every page through it. nixant forwards the host port (8081) to guest port 80, so the guest also serves the site on the URL's port, on loopback only, and maps a custom URL host (for example `http://client.test:8081`) to `127.0.0.1` in `/etc/hosts`. `wp-site check` tests this.
 
 ### Mail
 
