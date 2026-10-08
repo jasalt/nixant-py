@@ -59,5 +59,18 @@ in pkgs.testers.runNixOSTest {
     # Rerunning setup converges without changes.
     machine.succeed("systemctl restart wordpress-setup.service")
     machine.succeed("su - dev -c 'wp-site check'")
+
+    # Copying the core again keeps the user's files in the web root and removes
+    # a file the previous core shipped but this one does not.
+    machine.succeed(
+      "su - dev -c '"
+      "cd /var/lib/wordpress && echo kept > robots.txt && touch wp-admin/obsolete.php"
+      " && echo ./wp-admin/obsolete.php >> .core-files && LC_ALL=C sort -o .core-files .core-files"
+      " && rm .core-version'"
+    )
+    machine.succeed("systemctl restart wordpress-setup.service")
+    machine.succeed("test -e /var/lib/wordpress/robots.txt")
+    machine.fail("test -e /var/lib/wordpress/wp-admin/obsolete.php")
+    machine.succeed("su - dev -c 'wp-site check'")
   '';
 }

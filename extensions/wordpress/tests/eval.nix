@@ -87,6 +87,8 @@ let
     caddyListensEverywhere = let system = evaluate { extra.wordpress.listenAddress = null; }; in
       !(lib.hasInfix "bind " system.config.services.caddy.virtualHosts.":80".extraConfig)
       && (settingsOf system).httpAddress == "127.0.0.1";
+    coreIdIsPackageName = (settingsOf base_).coreId == base.package.name
+      && lib.hasPrefix "wordpress-core-" (settingsOf base_).coreId;
     fpmSendsMailToMailpit = lib.hasInfix "mailpit sendmail -S 127.0.0.1:1025"
       base_.config.services.phpfpm.pools.wordpress.phpOptions;
     opcacheRevalidates = lib.hasInfix "opcache.revalidate_freq = 0"

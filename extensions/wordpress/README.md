@@ -67,7 +67,7 @@ When `up` finishes (`... ready`):
 | Option | Default | Meaning |
 |---|---|---|
 | `wordpress.enable` | `false` | Turn the site on. |
-| `wordpress.package` | upstream WordPress tarball from nixpkgs | Core source, copied into `/var/lib/wordpress` by the setup unit. nixpkgs' own `wordpress` package omits the bundled themes and plugins, so a fresh site would have no theme. |
+| `wordpress.package` | upstream WordPress tarball from nixpkgs | Core source, copied into `/var/lib/wordpress` by the setup unit. nixpkgs' own `wordpress` package omits the bundled themes and plugins, so a fresh site would have no theme. The core is copied again when the package's name (its version) changes; give a patched core its own name. |
 | `wordpress.phpPackage` | `pkgs.php` (8.4 at the pinned nixpkgs) | PHP for PHP-FPM and WP-CLI. Override it for another version; it needs mysqli, gd, zip, exif and intl, which nixpkgs' PHP has. |
 | `wordpress.title` | `"WordPress"` | Site title, used at the first install only. |
 | `wordpress.listenAddress` | `"127.0.0.1"` | Guest address the site is served on. nixant's port forward connects to the guest's loopback, so the default keeps the site off the Incus bridge, where other instances could reach it. `null` listens on every interface, for example to browse a VM guest by its address. |
@@ -102,7 +102,7 @@ Changing `site.nix` and running `nixant up` converges the site:
 - changing `wordpress.url`, for example after changing the forwarded host port, updates `home` and `siteurl`;
 - changing `wordpress.wpConfig` updates `wp-config.php`;
 - changing `title` or the admin settings does not touch an installed site;
-- a new `wordpress.package` replaces the core files, runs the database upgrade and keeps `wp-config.php`, `wp-content` and the uploads.
+- a new `wordpress.package` replaces the core files, runs the database upgrade and keeps `wp-config.php`, `wp-content` and the uploads. Files the previous core shipped and the new one does not are removed (listed in `/var/lib/wordpress/.core-files`); other files you put in the web root, such as `robots.txt`, are kept.
 
 If nothing changed, `nixant up` does not activate at all.
 

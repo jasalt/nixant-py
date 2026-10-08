@@ -61,7 +61,9 @@ in {
       description = ''
         WordPress core source, copied into /var/lib/wordpress by the setup
         unit. The default is the upstream tarball of nixpkgs' WordPress, whose
-        own package omits the bundled themes and plugins.
+        own package omits the bundled themes and plugins. The core is copied
+        again when the package's name changes, so a rebuild of the same
+        version does not touch the site; give a patched core its own name.
       '';
     };
 
@@ -240,7 +242,9 @@ in {
           # `wp-site check` requests the site here.
           httpAddress = if cfg.listenAddress == null then "127.0.0.1" else cfg.listenAddress;
           core = "${cfg.package}";
-          coreId = builtins.baseNameOf "${cfg.package}";
+          # The name, not the store path: a rebuild with a new hash but the
+          # same name (version) must not copy the core again.
+          coreId = cfg.package.name or (builtins.baseNameOf "${cfg.package}");
           db = db // { user = user; };
           mailpitUrl = if uiPort == [] then null
             else "http://localhost:${toString (builtins.head uiPort).host}";
@@ -310,7 +314,7 @@ in {
             bind ${cfg.listenAddress}
           '' + ''
             root * ${root}
-            # Setup state (.core-version, .cache) lives in the web root.
+            # Setup state (.core-version, .core-files, .cache) lives in the web root.
             @dotfiles path /.*
             respond @dotfiles 404
             encode gzip

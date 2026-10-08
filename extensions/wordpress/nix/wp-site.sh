@@ -43,9 +43,11 @@ wp() {
   command wp --path="$root" "$@"
 }
 
-# Store files are read-only; copy them as plain writable files.
+# Store files are read-only; copy them as plain writable files. The new core is
+# recorded by finish_core, once the database has been upgraded to it.
 copy_core() {
-  local installed=
+  local installed='' manifest="$root/.core-files" next="$root/.core-files.next" file
+  core_changed=
   [ -e "$root/.core-version" ] && installed=$(<"$root/.core-version")
   if [ "$installed" = "$core_id" ]; then
     return
@@ -53,17 +55,33 @@ copy_core() {
   [ -e "$core/wp-includes/version.php" ] || die "$core is not a WordPress core (no wp-includes/version.php)"
   echo "wp-site: installing WordPress core ($core_id)"
   mkdir -p "$root"
-  rsync -rltp --chmod=Du=rwx,Dg=rx,Fu=rw,Fg=r --delete \
+  # Every store file has the same mtime, so compare contents, not size and time.
+  rsync -rlpc --chmod=Du=rwx,Dg=rx,Fu=rw,Fg=r \
     --exclude=/wp-config.php --exclude=/wp-content/ \
-    --exclude=/.core-version --exclude=/.cache/ \
     "$core"/ "$root"/
+  # Remove only files the previous core shipped and this one does not, as
+  # WordPress's own updater does; anything else in the web root is the user's.
+  (cd "$core" && find . -path ./wp-content -prune -o ! -type d -print) | LC_ALL=C sort >"$next"
+  if [ -e "$manifest" ]; then
+    while IFS= read -r file; do
+      rm -f -- "$root/$file"
+    done < <(LC_ALL=C comm -23 "$manifest" "$next")
+  fi
+  mv -f "$next" "$manifest"
   # Bundled themes and plugins are seeded once and only added afterwards, as
   # WordPress's own updater does; content the user changed is left alone.
   mkdir -p "$root/wp-content"
   rsync -rltp --chmod=Du=rwx,Dg=rx,Fu=rw,Fg=r --ignore-existing \
     "$core/wp-content/" "$root/wp-content/"
   chmod 0750 "$root"
-  if [ -e "$root/wp-config.php" ] && wp core is-installed; then
+  core_changed=1
+}
+
+# Runs after wait_for_database, so a failing `wp core is-installed` means no
+# installation (which install_site then creates), not an unreachable database.
+finish_core() {
+  [ -n "$core_changed" ] || return 0
+  if wp core is-installed; then
     wp core update-db
   fi
   printf '%s\n' "$core_id" >"$root/.core-version"
@@ -198,6 +216,7 @@ setup() {
   configure
   install_mu_plugin
   wait_for_database
+  finish_core
   install_site
   converge_urls
   link_components plugins
