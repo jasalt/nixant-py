@@ -184,9 +184,9 @@ def test_name_refuses_when_instance_exists(cli: dict) -> None:
 def test_name_default_uses_committed_name_and_checkout(
     cli: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    evaluation = Mock()
-    evaluation.spec.instance_name = "shop-dev"
-    monkeypatch.setattr("nixant.cli.evaluate", Mock(return_value=evaluation))
+    spec = Mock()
+    spec.instance_name = "shop-dev"
+    monkeypatch.setattr("nixant.cli.evaluate_spec", Mock(return_value=spec))
     result = CliRunner().invoke(app, ["name"])
     assert result.exit_code == 0, result.output
     assert (

@@ -9,7 +9,7 @@ import pytest
 from nixant.errors import NixantError, UsageError
 from nixant.models import MachineSpec
 from nixant.nix.build import build, gcroot_path
-from nixant.nix.eval import evaluate
+from nixant.nix.eval import evaluate, evaluate_spec
 from nixant.run import Runner
 
 DRV = "/nix/store/" + "a" * 32 + "-system.drv"
@@ -81,7 +81,7 @@ def test_single_evaluation(
 
 def test_runtime_only(runtime: dict, tmp_path: Path) -> None:
     runner = runner_with({"runtime": runtime})
-    assert evaluate(tmp_path, "dev", runner, with_derivation=False).drv_path is None
+    assert evaluate_spec(tmp_path, "dev", runner) == MachineSpec.from_runtime(runtime)
     assert "toplevel" not in runner.run.call_args.args[0][-1]
 
 

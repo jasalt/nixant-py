@@ -15,12 +15,34 @@ from nixant.run import Runner
 @dataclass(frozen=True)
 class Evaluation:
     spec: MachineSpec
-    drv_path: str | None
+    drv_path: str
 
 
-def evaluate(
-    root: Path, target: str, runner: Runner, *, with_derivation: bool = True
-) -> Evaluation:
+def evaluate(root: Path, target: str, runner: Runner) -> Evaluation:
+    """The runtime and the system derivation, from one evaluation."""
+    spec, drv_path = _evaluate(root, target, runner, with_derivation=True)
+    return Evaluation(spec, _drv_path(drv_path))
+
+
+def evaluate_spec(root: Path, target: str, runner: Runner) -> MachineSpec:
+    """The runtime only; cheaper, since nothing forces the system closure."""
+    return _evaluate(root, target, runner, with_derivation=False)[0]
+
+
+def _drv_path(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+\.drv", value) is None
+    ):
+        raise NixantError(
+            "invalid Nix evaluation response: invalid system derivation path"
+        )
+    return value
+
+
+def _evaluate(
+    root: Path, target: str, runner: Runner, *, with_derivation: bool
+) -> tuple[MachineSpec, object]:
     validate_target(target)
     evaluation_preflight(root, runner)
     print(f"evaluating {target}…", file=sys.stderr, flush=True)
@@ -52,12 +74,6 @@ def evaluate(
                 f"target {target!r} must import nixant.nixosModules.container"
             )
         spec = MachineSpec.from_runtime(data["runtime"])
-        drv_path = data["drvPath"] if with_derivation else None
-        if with_derivation and (
-            not isinstance(drv_path, str)
-            or re.fullmatch(r"/nix/store/[a-z0-9]{32}-[^/\s]+\.drv", drv_path) is None
-        ):
-            raise ValueError("invalid system derivation path")
-        return Evaluation(spec, drv_path)
+        return spec, data["drvPath"] if with_derivation else None
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise NixantError(f"invalid Nix evaluation response: {exc}") from exc

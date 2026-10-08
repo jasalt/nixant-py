@@ -33,7 +33,7 @@ from nixant.naming import (
 )
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build, gcroot_path
-from nixant.nix.eval import evaluate
+from nixant.nix.eval import evaluate, evaluate_spec
 from nixant.ownership import (
     PREFIX,
     check_owner,
@@ -171,7 +171,6 @@ def _deploy(
         if not rebuild:
             # Fail before building or creating anything the instance cannot take.
             _refuse(validate(spec), "cannot apply configuration")
-        assert evaluated.drv_path is not None
         system = build(root, target, evaluated.drv_path, runner)
         state = resolve(
             provider,
@@ -477,7 +476,7 @@ def _orphans(provider: IncusProvider) -> None:
 def show_config(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
     """Print runtime configuration and resolved checkout paths as JSON."""
     root = discover_project()
-    spec = evaluate(root, target, ctx.obj["runner"], with_derivation=False).spec
+    spec = evaluate_spec(root, target, ctx.obj["runner"])
     override = get_override(root, target, ctx.obj["runner"])
     sources = resolve_mount_sources(
         root, {mount.name: mount.source for mount in spec.mounts}
@@ -526,8 +525,8 @@ def name(
             )
             return
         if new_name is None:
-            committed = evaluate(root, target, runner, with_derivation=False)
-            new_name = propose(committed.spec.instance_name, root)
+            committed = evaluate_spec(root, target, runner)
+            new_name = propose(committed.instance_name, root)
         validate_instance_name(new_name)
         scope = set_override(root, target, new_name, runner)
         typer.echo(

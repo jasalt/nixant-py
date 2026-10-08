@@ -8,7 +8,6 @@ from typer.testing import CliRunner
 from nixant.cli import app
 from nixant.models import MachineSpec, MachineState
 from nixant.nix.build import gcroot_path
-from nixant.nix.eval import Evaluation
 from nixant.ownership import PREFIX, metadata
 
 
@@ -22,6 +21,7 @@ def display(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Mock, Mock
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda _: provider)
     evaluate = Mock()
     monkeypatch.setattr("nixant.cli.evaluate", evaluate)
+    monkeypatch.setattr("nixant.cli.evaluate_spec", evaluate)
     return provider, evaluate, tmp_path
 
 
@@ -61,12 +61,11 @@ def test_config_roundtrip(display: tuple) -> None:
     )
     spec = MachineSpec.from_runtime(runtime)
     assert spec.to_runtime() == runtime
-    evaluate.return_value = Evaluation(spec, None)
+    evaluate.return_value = spec
     result = CliRunner().invoke(app, ["config"])
     assert result.exit_code == 0, result.output
     data = json.loads(result.stdout)
     assert data["runtime"] == runtime
     assert data["mountSources"]["workspace"] == str(root)
     assert data["instanceNameSource"] == "config"
-    assert evaluate.call_args.kwargs["with_derivation"] is False
     provider.find.assert_not_called()
