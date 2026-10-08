@@ -102,6 +102,8 @@ let
     checkSettingsExported = base_.config.environment.etc."wordpress/site.json".source
         == base_.config.systemd.services.wordpress-setup.environment.WP_SITE_SETTINGS
       && (settingsOf base_).mailpit.uiPort == 8025;
+    agentIsolationKeepsUrl = valid { extra.nixant.isolation = "agent"; }
+      && (evaluate { extra.nixant.isolation = "agent"; }).config.wordpress.url == "http://localhost:8081";
     badConstantName = fails "PHP constant names" { extra.wordpress.wpConfig."BAD NAME" = true; };
     componentsInSettings = let
       settings = settingsOf (evaluate { extra.wordpress = {
