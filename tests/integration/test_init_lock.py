@@ -1,9 +1,9 @@
 """The packaged CLI pins a generated project's lock to its own revision.
 
 These build the nixant package with Nix and lock real projects, but never
-touch Incus. A `nix` shim on PATH keeps the network to pinned inputs: it
-redirects the canonical nixant URL to this repository at the same revision
-and pins nixpkgs to the tool's own lock.
+create Incus instances. A `nix` shim on PATH keeps the network to pinned
+inputs: it redirects the canonical nixant URL to this repository at the same
+revision and pins nixpkgs to the tool's own lock.
 """
 
 import json
