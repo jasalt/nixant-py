@@ -16,6 +16,7 @@ from nixant import deploy, snapshots
 from nixant.adopt import adopt as adopt_instance
 from nixant.adopt import choose
 from nixant.errors import CommandError, NixantError, UsageError
+from nixant.incus import IncusProvider
 from nixant.init import (
     DEFAULT_TEMPLATE,
     init_project,
@@ -45,7 +46,6 @@ from nixant.project import (
     resolve_mount_sources,
     target_lock,
 )
-from nixant.providers.incus import IncusProvider
 from nixant.readiness import wait_ready
 from nixant.run import Runner, check_host_tools
 

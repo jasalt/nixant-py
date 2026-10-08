@@ -9,9 +9,9 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from nixant.errors import CommandError, NixantError, UsageError
+from nixant.incus import IncusProvider
 from nixant.naming import sanitize
 from nixant.project import in_git_work_tree
-from nixant.providers.base import Provider
 from nixant.run import Runner
 
 NAME_MARKER = "nixant-template-dev"
@@ -138,7 +138,7 @@ def init_project(
     directory: Path,
     template: str,
     runner: Runner,
-    provider: Provider,
+    provider: IncusProvider,
     environ: Mapping[str, str] = os.environ,
 ) -> None:
     flake = self_path(environ)

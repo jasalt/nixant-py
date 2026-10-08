@@ -1,4 +1,4 @@
-"""Immutable runtime values shared by evaluation, planning, and providers."""
+"""Immutable runtime values shared by evaluation, planning, and the Incus adapter."""
 
 import re
 from collections.abc import Mapping

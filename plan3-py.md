@@ -9,7 +9,7 @@ A small Python CLI that runs NixOS development environments on local Incus.
 - Incus system containers first; VMs later (Phase 3).
 - NixOS owns guest state. The CLI owns instance lifecycle, host integration, and moving a host-built system into the guest.
 - Machine settings live in the NixOS configuration as `nixant.*` options; the CLI reads them as JSON.
-- Incus is the only backend. A `Provider` protocol exists, but no second implementation is planned before Phase 5.
+- Incus is the only backend. The code uses `IncusProvider` (`incus.py`) directly; there is no backend protocol or `providers/` package until a second backend actually exists (Phase 5).
 
 Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs).
 
@@ -22,7 +22,7 @@ Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs
 | 3 | Transport | Build on host; stream missing paths through `incus exec` stdin; activate with `switch-to-configuration` |
 | 4 | Naming | `nixant.instanceName` is required (assertion) and also sets the guest hostname; `init` fills in `<project dir>-dev`; ownership verified via metadata |
 | 5 | State | Incus `user.nixant.*` keys only; host GC root under XDG state as a disposable cache |
-| 6 | Backend | `Provider` protocol, Incus as the only implementation |
+| 6 | Backend | Incus only, through the concrete `IncusProvider`; no backend protocol |
 | 7 | Guest user | `nixant.user` with host UID; CLI verifies `uid == os.getuid()` |
 | 8 | `exec` syntax | `nixant exec [-n TARGET] CMD...` |
 | 9 | Readiness | Retry `incus exec -- true`, then `systemctl is-system-running --wait` (running or degraded); ~60s container, ~180s VM |
@@ -490,40 +490,24 @@ This is separate from `nixant.runtime.schemaVersion`, which describes the Nix-si
 
 ## Incus provider
 
-```python
-class Provider(Protocol):
-    def inspect(self, name: str) -> MachineState | None: ...
-    def create(self, spec: MachineSpec, metadata: dict[str, str]) -> None: ...
-    def apply_changes(self, name: str, changes: list[Change]) -> None: ...
-    def start(self, name: str) -> None: ...
-    def stop(self, name: str) -> None: ...
-    def destroy(self, name: str) -> None: ...
-    def run(
-        self,
-        name: str,
-        argv: list[str],
-        *,
-        user: str | None = None,
-        cwd: str | None = None,
-        stdin: IO[bytes] | None = None,
-        capture: bool = False,
-    ) -> CompletedProcess: ...
-    def exec_argv(
-        self, name: str, argv: list[str], *, user: str, cwd: str
-    ) -> list[str]: ...
-    def find(self, metadata: dict[str, str]) -> list[MachineState]: ...
-```
+`IncusProvider` in `incus.py` is the only code that runs `incus`. Commands and tests use it directly (tests substitute an in-memory Incus behind the real class, or `Mock(spec=IncusProvider)`); there is no abstract backend interface. Its surface:
 
-`exec_argv` returns the argv for `os.execvp` (shell/exec); `run` is used for readiness and activation. Planning lives in `planner.py`, not in the provider.
+- Lookup: `inspect(name)` (one `incus query`, `None` only for "Instance not found"), `find(metadata)` (filter on `user.nixant.*` keys).
+- Lifecycle: `create(spec, metadata)` (bare instance, root size at creation), `start`, `stop`, `restart`, `destroy`, `set_metadata` (`user.nixant.*` keys only).
+- Settings: `apply(change)` runs one typed planner action (`SetConfig`, `AddDevice`, `SetDevice`, `RemoveDevice`, `SetRootSize`); `check_quota(pool)` refuses `nixant.disk` on pools that cannot enforce it; `verify_mounts(name, mounts)` only waits for targets in `/proc/mounts` and repairs a missing one with the planner's remount changes.
+- Snapshots: `snapshot_create`, `snapshot_list`, `snapshot_delete`, `snapshot_restore`.
+- Guest commands: `run` (always `incus exec -T`, for readiness and activation) and `exec_argv` (the argv `shell`/`exec` pass to `os.execvp`).
 
-Command construction is confined to `providers/incus.py`:
+Planning lives in `planner.py`, not in the provider: the provider never compares desired and actual state.
+
+Command construction is confined to `incus.py`:
 
 - Always qualify instances as `local:NAME`; use the current Incus project.
 - Image: `images:nixos/unstable` (only bootstraps the guest; the flake pins the real system). `images:nixos/26.05` also exists, but pinning it changes nothing: both are rebuilt daily.
   - Image churn is accepted. With Incus defaults, a cached remote image auto-updates (about 280 MB per refresh) and expires 10 days after it was last used.
   - These are host-wide settings (`images.auto_update_cached`, `images.auto_update_interval`, `images.remote_cache_expiry`) shared with unrelated instances, so nixant never changes server config. The README documents them for admins who want less churn.
 - `security.nesting=true` is always set: guest-side Nix builds need it (see Guest-side Nix).
-- Create: `incus create images:nixos/unstable local:NAME -c security.nesting=true -c user.nixant.*…`; add devices; then `incus start local:NAME`. The image is named with its `images:` remote and the destination with `local:`. A bare `local:IMAGE` would search the local image store instead.
+- Create: `incus create images:nixos/unstable local:NAME -c security.nesting=true -c user.nixant.*… [-d root,size=<bytes>]`; the planner then adds the `nixant-*` devices; then `incus start local:NAME`. The image is named with its `images:` remote and the destination with `local:`. A bare `local:IMAGE` would search the local image store instead.
 - VM (Phase 3): `--vm -c security.secureboot=false` (image declares `requirements.secureboot=false`).
 - Mounts (containers): `disk source=<abs> path=<target> shift=true [readonly=true]`. If adding with `shift=true` fails, stop with an error. Without shift, files appear as 65534 and are not writable. Verify the mount appeared and retry (see Relation to Incant).
 - Ports (containers only): `proxy listen=tcp:<address>:<host> connect=tcp:127.0.0.1:<guest>`. VM ports are rejected: Incus requires NAT-mode proxies for VMs, which need a static IPv4 address on the instance NIC that nixant does not manage.
@@ -634,8 +618,8 @@ src/nixant/
   errors.py
   run.py                   # single subprocess runner (verbose echo, capture, stdin)
   planner.py               # desired vs actual → list[Change] with classification
-  nix/{eval,build,activate}.py
-  providers/{base,incus}.py
+  nix/{eval,build,activate,store}.py
+  incus.py                 # IncusProvider: the only code that runs incus
 tests/{unit,integration}/
 ```
 
@@ -686,7 +670,7 @@ Snapshots/restore, ephemeral instances, agent-oriented restricted profiles.
 
 ### Phase 5: second backend
 
-Only if needed; use it to reshape `Provider`.
+Only if needed. Extract a backend interface from `IncusProvider` then, shaped by what both backends actually share, instead of designing one up front.
 
 ---
 

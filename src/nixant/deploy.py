@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from nixant.errors import NixantError
+from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState
 from nixant.naming import get_override
 from nixant.nix.activate import activate, can_skip
@@ -22,7 +23,6 @@ from nixant.planner import (
     validate,
 )
 from nixant.project import resolve_mount_sources
-from nixant.providers.incus import IncusProvider
 from nixant.readiness import wait_ready
 from nixant.run import Runner
 

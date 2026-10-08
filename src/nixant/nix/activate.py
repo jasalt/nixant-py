@@ -5,14 +5,14 @@ import sys
 import time
 
 from nixant.errors import CommandError, NixantError
+from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState
 from nixant.ownership import PREFIX
-from nixant.providers.base import Provider
 from nixant.readiness import wait_ready
 from nixant.run import Runner
 
 
-def can_skip(provider: Provider, state: MachineState, system: str) -> bool:
+def can_skip(provider: IncusProvider, state: MachineState, system: str) -> bool:
     if (
         state.config.get(PREFIX + "activation") != "ok"
         or state.config.get(PREFIX + "system") != system
@@ -25,7 +25,7 @@ def can_skip(provider: Provider, state: MachineState, system: str) -> bool:
 
 
 def activate(
-    provider: Provider,
+    provider: IncusProvider,
     runner: Runner,
     spec: MachineSpec,
     system: str,

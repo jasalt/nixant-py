@@ -8,10 +8,10 @@ from unittest.mock import Mock
 import pytest
 
 from nixant.errors import CommandError, NixantError
+from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState
 from nixant.nix.activate import activate, can_skip
 from nixant.ownership import PREFIX
-from nixant.providers.base import Provider
 from nixant.run import Runner
 
 SYSTEM = "/nix/store/" + "a" * 32 + "-system"
@@ -31,7 +31,7 @@ def spec() -> MachineSpec:
 
 
 def setup(rc: int, stderr: bytes = b"") -> tuple[Mock, Mock, list]:
-    provider = Mock(spec=Provider)
+    provider = Mock(spec=IncusProvider)
     runner = Mock(spec=Runner, verbose=False)
     events = []
     provider.set_metadata.side_effect = lambda name, values: events.append(values)
@@ -176,7 +176,7 @@ def test_skip_requires_ok(activation: str) -> None:
         },
         {},
     )
-    provider = Mock(spec=Provider)
+    provider = Mock(spec=IncusProvider)
     assert not can_skip(provider, state, SYSTEM)
     provider.run.assert_not_called()
 
@@ -192,7 +192,7 @@ def test_skip_requires_all_three() -> None:
         },
         {},
     )
-    provider = Mock(spec=Provider)
+    provider = Mock(spec=IncusProvider)
     provider.run.return_value = result(stdout=SYSTEM.encode())
     assert can_skip(provider, state, SYSTEM)
     assert not can_skip(provider, state, "different")

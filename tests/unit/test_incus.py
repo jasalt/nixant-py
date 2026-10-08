@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from nixant.errors import CommandError, NixantError
+from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MountSpec
 from nixant.planner import (
     Action,
@@ -19,7 +20,6 @@ from nixant.planner import (
     SetRootSize,
     mount_device,
 )
-from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
 
@@ -205,7 +205,7 @@ MOUNTS = b"source /workspace none rw 0 0\n"
 @pytest.fixture
 def no_wait(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     sleeps: list[float] = []
-    monkeypatch.setattr("nixant.providers.incus.time.sleep", sleeps.append)
+    monkeypatch.setattr("nixant.incus.time.sleep", sleeps.append)
     return sleeps
 
 
@@ -236,7 +236,7 @@ def test_verify_mounts_reattaches_through_planned_changes(
     no_wait: list[float],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
+    monkeypatch.setattr("nixant.incus.MOUNT_POLLS", 1)
     provider.run = Mock(
         side_effect=[
             subprocess.CompletedProcess([], 0, b""),
@@ -269,7 +269,7 @@ def test_verify_mounts_gives_up_after_two_reattachments(
     no_wait: list[float],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
+    monkeypatch.setattr("nixant.incus.MOUNT_POLLS", 1)
     provider.run = Mock(return_value=subprocess.CompletedProcess([], 0, b""))
     with pytest.raises(NixantError, match="did not appear"):
         provider.verify_mounts(
@@ -285,7 +285,7 @@ def test_shift_failure_never_retries_unshifted(
     no_wait: list[float],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
+    monkeypatch.setattr("nixant.incus.MOUNT_POLLS", 1)
     provider.run = Mock(return_value=subprocess.CompletedProcess([], 0, b""))
     provider.runner.run.side_effect = [
         subprocess.CompletedProcess([], 0, b""),

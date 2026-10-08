@@ -3,9 +3,9 @@
 from pathlib import Path
 
 from nixant.errors import NixantError
+from nixant.incus import IncusProvider
 from nixant.models import SCHEMA_VERSION, MachineState
 from nixant.project import project_id, validate_target
-from nixant.providers.base import Provider
 
 PREFIX = "user.nixant."
 
@@ -50,7 +50,7 @@ def check_schema(state: MachineState) -> None:
 
 
 def lookup(
-    provider: Provider, root: Path, target: str, *, require_schema: bool = True
+    provider: IncusProvider, root: Path, target: str, *, require_schema: bool = True
 ) -> MachineState | None:
     validate_target(target)
     states = provider.find(
@@ -73,7 +73,7 @@ def lookup(
 
 
 def resolve(
-    provider: Provider,
+    provider: IncusProvider,
     root: Path,
     target: str,
     name: str,

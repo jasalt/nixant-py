@@ -5,23 +5,23 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from nixant.errors import NixantError
+from nixant.incus import IncusProvider
 from nixant.models import MachineState, MountSpec
 from nixant.nix.build import gcroot_path
 from nixant.ownership import PREFIX, check_schema
 from nixant.planner import MOUNT_PREFIX, Change, Effect, SetDevice
 from nixant.project import project_id, state_directory
-from nixant.providers.base import Provider
 from nixant.run import Runner
 
 
-def candidates(provider: Provider, target: str) -> list[MachineState]:
+def candidates(provider: IncusProvider, target: str) -> list[MachineState]:
     """Managed instances of this target whose recorded checkout is gone."""
     found = provider.find({PREFIX + "managed": "true", PREFIX + "target": target})
     return [s for s in found if not Path(s.config.get(PREFIX + "root", "")).is_dir()]
 
 
 def choose(
-    provider: Provider, root: Path, target: str, instance: str | None
+    provider: IncusProvider, root: Path, target: str, instance: str | None
 ) -> MachineState:
     if instance is not None:
         state = provider.inspect(instance)
@@ -84,7 +84,7 @@ def mount_moves(
 
 
 def rebase_mounts(
-    provider: Provider,
+    provider: IncusProvider,
     name: str,
     devices: Mapping[str, Mapping[str, str]],
     old_root: str,
@@ -103,7 +103,11 @@ def rebase_mounts(
 
 
 def adopt(
-    provider: Provider, runner: Runner, root: Path, target: str, state: MachineState
+    provider: IncusProvider,
+    runner: Runner,
+    root: Path,
+    target: str,
+    state: MachineState,
 ) -> None:
     check_schema(state)
     old_root = state.config.get(PREFIX + "root", "")

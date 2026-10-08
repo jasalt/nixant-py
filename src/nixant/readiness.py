@@ -4,11 +4,11 @@ import subprocess
 import time
 
 from nixant.errors import NixantError
-from nixant.providers.base import Provider
+from nixant.incus import IncusProvider
 
 
 def wait_ready(
-    provider: Provider,
+    provider: IncusProvider,
     name: str,
     kind: str,
     *,

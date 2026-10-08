@@ -9,12 +9,12 @@ from typer.testing import CliRunner
 
 from nixant.cli import app, parse_duration
 from nixant.errors import NixantError, UsageError
+from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
 from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
 from nixant.ownership import PREFIX
 from nixant.planner import SetConfig, SetRootSize, mount_device, plan
-from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
 

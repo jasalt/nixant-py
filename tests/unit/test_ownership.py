@@ -5,9 +5,9 @@ from unittest.mock import Mock
 import pytest
 
 from nixant.errors import NixantError
+from nixant.incus import IncusProvider
 from nixant.models import MachineState
 from nixant.ownership import PREFIX, check_owner, lookup, metadata, resolve
-from nixant.providers.base import Provider
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def test_owner_triple(state: MachineState, tmp_path: Path) -> None:
 
 
 def test_metadata_lookup(state: MachineState, tmp_path: Path) -> None:
-    provider = Mock(spec=Provider)
+    provider = Mock(spec=IncusProvider)
     provider.find.return_value = []
     assert lookup(provider, tmp_path, "dev") is None
     provider.find.return_value = [state]
@@ -44,7 +44,7 @@ def test_schema_cleanup_allowed(
     state: MachineState, tmp_path: Path, schema: str
 ) -> None:
     state = replace(state, config={**state.config, PREFIX + "schema": schema})
-    provider = Mock(spec=Provider)
+    provider = Mock(spec=IncusProvider)
     provider.find.return_value = [state]
     with pytest.raises(NixantError, match="matching nixant version"):
         lookup(provider, tmp_path, "dev")
@@ -52,7 +52,7 @@ def test_schema_cleanup_allowed(
 
 
 def test_resolve_table(state: MachineState, tmp_path: Path) -> None:
-    provider = Mock(spec=Provider)
+    provider = Mock(spec=IncusProvider)
     provider.find.return_value = []
     provider.inspect.return_value = None
     assert resolve(provider, tmp_path, "dev", "test-dev", kind="container") is None
@@ -83,7 +83,7 @@ def test_resolve_table(state: MachineState, tmp_path: Path) -> None:
 
 
 def test_two_targets_same_name(state: MachineState, tmp_path: Path) -> None:
-    provider = Mock(spec=Provider)
+    provider = Mock(spec=IncusProvider)
     provider.find.return_value = []
     provider.inspect.return_value = state
     with pytest.raises(NixantError, match="belongs to target dev"):

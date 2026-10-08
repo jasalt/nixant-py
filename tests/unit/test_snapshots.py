@@ -10,10 +10,10 @@ from typer.testing import CliRunner
 from nixant.adopt import adopt
 from nixant.cli import app
 from nixant.errors import NixantError, UsageError
+from nixant.incus import IncusProvider
 from nixant.models import SCHEMA_VERSION, MachineState, Snapshot
 from nixant.ownership import PREFIX
 from nixant.project import project_id
-from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 from nixant.snapshots import default_name, restore, validate_name
 

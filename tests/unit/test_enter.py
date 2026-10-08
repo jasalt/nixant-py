@@ -5,9 +5,9 @@ import pytest
 from typer.testing import CliRunner
 
 from nixant.cli import app
+from nixant.incus import IncusProvider
 from nixant.models import MachineState
 from nixant.ownership import PREFIX
-from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
 
