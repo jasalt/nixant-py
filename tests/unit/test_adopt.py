@@ -222,16 +222,13 @@ def test_adopt_waits_for_moved_mounts_on_a_running_instance(
     )
     provider = Mock()
     adopt(provider, moved["runner"], new, "dev", state)
-    calls = provider.ensure_mount.call_args_list
+    calls = provider.verify_mounts.call_args_list
     if status == "Stopped":
         assert calls == []
         return
-    assert len(calls) == 1
-    assert calls[0].args == (
-        "lost",
-        MountSpec("workspace", str(new), "/workspace", False),
-    )
-    assert calls[0].kwargs == {"verify": True}
+    assert [call.args for call in calls] == [
+        ("lost", [MountSpec("workspace", str(new), "/workspace", False)])
+    ]
 
 
 def test_adopt_keeps_the_old_root_when_registration_fails(moved: dict) -> None:

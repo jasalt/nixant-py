@@ -7,8 +7,8 @@ from unittest.mock import Mock
 import pytest
 
 from nixant.errors import CommandError, NixantError
-from nixant.models import MachineSpec, MachineState, MountSpec
-from nixant.planner import Change, Effect
+from nixant.models import MachineSpec, MountSpec
+from nixant.planner import Change, Effect, mount_device
 from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
@@ -189,14 +189,44 @@ def test_exec_and_binary_run(provider: IncusProvider, tmp_path: Path) -> None:
         assert call.kwargs["timeout"] == 30
 
 
-def test_mount_retry(
-    provider: IncusProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+MOUNTS = b"source /workspace none rw 0 0\n"
+
+
+@pytest.fixture
+def no_wait(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    sleeps: list[float] = []
+    monkeypatch.setattr("nixant.providers.incus.time.sleep", sleeps.append)
+    return sleeps
+
+
+def test_verify_mounts_never_touches_mounted_devices(
+    provider: IncusProvider, tmp_path: Path, no_wait: list[float]
 ) -> None:
-    monkeypatch.setattr("nixant.providers.incus.time.sleep", lambda _: None)
-    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
-    provider.inspect = Mock(
-        return_value=MachineState("dev", "Running", "container", {}, {})
+    provider.run = Mock(return_value=subprocess.CompletedProcess([], 0, MOUNTS))
+    provider.verify_mounts("dev", [MountSpec("workspace", str(tmp_path), "/workspace")])
+    provider.runner.run.assert_not_called()
+    provider.run.assert_called_once_with("dev", ["cat", "/proc/mounts"], capture=True)
+
+
+def test_verify_mounts_waits_for_a_late_mount(
+    provider: IncusProvider, tmp_path: Path, no_wait: list[float]
+) -> None:
+    absent = subprocess.CompletedProcess([], 0, b"")
+    provider.run = Mock(
+        side_effect=[absent, absent, absent, subprocess.CompletedProcess([], 0, MOUNTS)]
     )
+    provider.verify_mounts("dev", [MountSpec("workspace", str(tmp_path), "/workspace")])
+    provider.runner.run.assert_not_called()  # waited instead of re-attaching
+    assert no_wait == [0.5, 0.5, 0.5]
+
+
+def test_verify_mounts_reattaches_through_planned_changes(
+    provider: IncusProvider,
+    tmp_path: Path,
+    no_wait: list[float],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
     provider.run = Mock(
         side_effect=[
             subprocess.CompletedProcess([], 0, b""),
@@ -205,192 +235,75 @@ def test_mount_retry(
             ),
         ]
     )
-    provider.ensure_mount(
-        "dev", MountSpec("workspace", str(tmp_path), "/work space"), verify=True
-    )
+    mount = MountSpec("workspace", str(tmp_path), "/work space")
+    provider.verify_mounts("dev", [mount])
     calls = [c.args[0] for c in provider.runner.run.call_args_list]
-    assert len(calls) == 3
-    assert calls[0][-2:] == ["shift=true", "readonly=false"]
-    assert calls[1] == [
-        "incus",
-        "config",
-        "device",
-        "remove",
-        "local:dev",
-        "nixant-mount-workspace",
+    assert calls == [
+        ["incus", "config", "device", "remove", "local:dev", "nixant-mount-workspace"],
+        [
+            "incus",
+            "config",
+            "device",
+            "add",
+            "local:dev",
+            "nixant-mount-workspace",
+            "disk",
+            *[f"{k}={v}" for k, v in mount_device(mount).items()],
+        ],
     ]
-    assert calls[0] == calls[2]
 
 
-def test_mount_retry_bounded(
-    provider: IncusProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_verify_mounts_gives_up_after_two_reattachments(
+    provider: IncusProvider,
+    tmp_path: Path,
+    no_wait: list[float],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("nixant.providers.incus.time.sleep", lambda _: None)
     monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
-    provider.inspect = Mock(
-        return_value=MachineState("dev", "Running", "container", {}, {})
-    )
     provider.run = Mock(return_value=subprocess.CompletedProcess([], 0, b""))
     with pytest.raises(NixantError, match="did not appear"):
-        provider.ensure_mount(
-            "dev", MountSpec("workspace", str(tmp_path), "/workspace"), verify=True
+        provider.verify_mounts(
+            "dev", [MountSpec("workspace", str(tmp_path), "/workspace")]
         )
     assert provider.run.call_count == 3
-
-
-def test_mount_verification_waits_for_a_late_mount(
-    provider: IncusProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    sleeps: list[float] = []
-    monkeypatch.setattr("nixant.providers.incus.time.sleep", sleeps.append)
-    device = {
-        "type": "disk",
-        "source": str(tmp_path),
-        "path": "/workspace",
-        "shift": "true",
-        "readonly": "false",
-    }
-    provider.inspect = Mock(
-        return_value=MachineState(
-            "dev", "Running", "vm", {}, {"nixant-mount-workspace": device}
-        )
-    )
-    absent = subprocess.CompletedProcess([], 0, b"")
-    present = subprocess.CompletedProcess([], 0, b"src /workspace virtiofs rw 0 0\n")
-    provider.run = Mock(side_effect=[absent, absent, absent, present])
-    provider.ensure_mount(
-        "dev", MountSpec("workspace", str(tmp_path), "/workspace"), verify=True
-    )
-    provider.runner.run.assert_not_called()  # waited instead of re-adding
-    assert sleeps == [0.5, 0.5, 0.5]
+    assert provider.runner.run.call_count == 4
 
 
 def test_shift_failure_never_retries_unshifted(
-    provider: IncusProvider, tmp_path: Path
+    provider: IncusProvider,
+    tmp_path: Path,
+    no_wait: list[float],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider.inspect = Mock(
-        return_value=MachineState("dev", "Running", "container", {}, {})
-    )
-    provider.runner.run.side_effect = CommandError(["incus"], 1, b"shift unsupported")
+    monkeypatch.setattr("nixant.providers.incus.MOUNT_POLLS", 1)
+    provider.run = Mock(return_value=subprocess.CompletedProcess([], 0, b""))
+    provider.runner.run.side_effect = [
+        subprocess.CompletedProcess([], 0, b""),
+        CommandError(["incus"], 1, b"shift unsupported"),
+    ]
     with pytest.raises(CommandError, match="shift unsupported"):
-        provider.ensure_mount(
-            "dev", MountSpec("workspace", str(tmp_path), "/workspace")
+        provider.verify_mounts(
+            "dev", [MountSpec("workspace", str(tmp_path), "/workspace")]
         )
-    assert provider.runner.run.call_count == 1
+    assert provider.runner.run.call_count == 2
     assert "shift=true" in provider.runner.run.call_args.args[0]
+
+
+def test_create_attaches_no_devices(provider: IncusProvider, tmp_path: Path) -> None:
+    spec = MachineSpec.from_runtime(
+        json.loads((Path(__file__).parents[2] / "nix/tests/runtime.json").read_text())
+    )
+    provider.create(
+        replace(spec, mounts=(MountSpec("workspace", str(tmp_path), "/workspace"),)),
+        {},
+    )
+    provider.runner.run.assert_called_once()
+    assert provider.runner.run.call_args.args[0][:2] == ["incus", "create"]
 
 
 def test_metadata_scope(provider: IncusProvider) -> None:
     with pytest.raises(NixantError, match="non-nixant"):
         provider.set_metadata("dev", {"security.privileged": "true"})
-    provider.runner.run.assert_not_called()
-
-
-@pytest.mark.parametrize("omit_readonly", [False, True])
-def test_matching_mount_is_not_mutated(
-    provider: IncusProvider, tmp_path: Path, omit_readonly: bool
-) -> None:
-    device = {
-        "type": "disk",
-        "source": str(tmp_path),
-        "path": "/workspace",
-        "shift": "true",
-    }
-    if not omit_readonly:
-        device["readonly"] = "false"
-    provider.inspect = Mock(
-        return_value=MachineState(
-            "dev", "Running", "container", {}, {"nixant-mount-workspace": device}
-        )
-    )
-    provider.run = Mock(
-        return_value=subprocess.CompletedProcess(
-            [], 0, b"source /workspace none rw 0 0\n"
-        )
-    )
-    provider.ensure_mount(
-        "dev", MountSpec("workspace", str(tmp_path), "/workspace"), verify=True
-    )
-    provider.runner.run.assert_not_called()
-    provider.run.assert_called_once_with("dev", ["cat", "/proc/mounts"], capture=True)
-
-
-@pytest.mark.parametrize(
-    ("key", "old_value"),
-    [
-        ("source", "/old-checkout"),
-        ("path", "/old-workspace"),
-        ("readonly", "true"),
-        ("shift", "false"),
-    ],
-)
-def test_changed_mount_updates_existing_device(
-    provider: IncusProvider, tmp_path: Path, key: str, old_value: str
-) -> None:
-    device = {
-        "type": "disk",
-        "source": str(tmp_path),
-        "path": "/workspace",
-        "readonly": "false",
-        "shift": "true",
-    }
-    device[key] = old_value
-    provider.inspect = Mock(
-        return_value=MachineState(
-            "dev", "Running", "container", {}, {"nixant-mount-workspace": device}
-        )
-    )
-    provider.ensure_mount("dev", MountSpec("workspace", str(tmp_path), "/workspace"))
-    provider.runner.run.assert_called_once_with(
-        [
-            "incus",
-            "config",
-            "device",
-            "set",
-            "local:dev",
-            "nixant-mount-workspace",
-            f"source={tmp_path}",
-            "path=/workspace",
-            "shift=true",
-            "readonly=false",
-        ]
-    )
-
-
-@pytest.mark.parametrize("missing", [False, True])
-def test_mount_rejects_missing_instance_or_wrong_device_type(
-    provider: IncusProvider, tmp_path: Path, missing: bool
-) -> None:
-    provider.inspect = Mock(
-        return_value=None
-        if missing
-        else MachineState(
-            "dev",
-            "Running",
-            "container",
-            {},
-            {"nixant-mount-workspace": {"type": "nic"}},
-        )
-    )
-    with pytest.raises(
-        NixantError, match="disappeared" if missing else "not a disk device"
-    ):
-        provider.ensure_mount(
-            "dev", MountSpec("workspace", str(tmp_path), "/workspace")
-        )
-    provider.runner.run.assert_not_called()
-
-
-@pytest.mark.parametrize("source", ["relative", "/nonexistent/nixant-mount-test"])
-def test_create_validates_mounts_before_mutation(
-    provider: IncusProvider, source: str
-) -> None:
-    spec = MachineSpec.from_runtime(
-        json.loads((Path(__file__).parents[2] / "nix/tests/runtime.json").read_text())
-    )
-    spec = replace(spec, mounts=(MountSpec("workspace", source, "/workspace"),))
-    with pytest.raises(NixantError, match="existing absolute source"):
-        provider.create(spec, {"user.nixant.managed": "true"})
     provider.runner.run.assert_not_called()
 
 

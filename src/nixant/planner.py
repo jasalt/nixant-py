@@ -9,8 +9,10 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
-from nixant.models import MachineSpec, MachineState
+from nixant.errors import NixantError
+from nixant.models import MachineSpec, MachineState, MountSpec
 
 MOUNT_PREFIX = "nixant-mount-"
 PORT_PREFIX = "nixant-port-"
@@ -58,13 +60,39 @@ def parse_size(value: str) -> int | None:
     return int(match[1]) * _UNITS[match[2]]
 
 
-def mount_device(mount_source: str, target: str, read_only: bool) -> dict[str, str]:
+def check_mount(mount: MountSpec) -> None:
+    """Reject a mount Incus cannot attach, before anything is built or created."""
+    if not mount.name or "/" in mount.name or "\0" in mount.name:
+        raise NixantError(f"invalid mount name {mount.name!r}")
+    source = Path(mount.source)
+    if not source.is_absolute() or not source.exists():
+        raise NixantError(f"mount {mount.name} requires an existing absolute source")
+
+
+def mount_device(mount: MountSpec) -> dict[str, str]:
+    """The one definition of a mount's disk device; every change is planned here."""
     return {
-        "source": mount_source,
-        "path": target,
+        "source": mount.source,
+        "path": mount.target,
         "shift": "true",
-        "readonly": "true" if read_only else "false",
+        "readonly": "true" if mount.read_only else "false",
     }
+
+
+def remount(mount: MountSpec) -> list[Change]:
+    """Detach and attach a mount again, for one that never showed up in the guest."""
+    name = f"{MOUNT_PREFIX}{mount.name}"
+    return [
+        Change("mounts", Effect.LIVE, f"remove {name}", "device-remove", name),
+        Change(
+            "mounts",
+            Effect.LIVE,
+            f"re-add {name}",
+            "device-add",
+            name,
+            mount_device(mount),
+        ),
+    ]
 
 
 def _device_changes(
@@ -188,9 +216,7 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
             MOUNT_PREFIX,
             "disk",
             {
-                f"{MOUNT_PREFIX}{mount.name}": mount_device(
-                    mount.source, mount.target, mount.read_only
-                )
+                f"{MOUNT_PREFIX}{mount.name}": mount_device(mount)
                 for mount in spec.mounts
             },
             state.devices,

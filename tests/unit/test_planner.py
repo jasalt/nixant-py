@@ -4,8 +4,17 @@ from pathlib import Path
 
 import pytest
 
+from nixant.errors import NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
-from nixant.planner import Effect, mount_device, parse_size, plan, validate
+from nixant.planner import (
+    Effect,
+    check_mount,
+    mount_device,
+    parse_size,
+    plan,
+    remount,
+    validate,
+)
 
 
 @pytest.fixture
@@ -27,7 +36,7 @@ def state(config=None, devices=None, expanded=None, kind="container") -> Machine
     )
 
 
-MOUNT = {"type": "disk", **mount_device("/src", "/workspace", False)}
+MOUNT = {"type": "disk", **mount_device(MountSpec("workspace", "/src", "/workspace"))}
 
 
 @pytest.mark.parametrize(
@@ -176,7 +185,10 @@ def test_retarget_onto_an_obsolete_target_removes_it_first(spec: MachineSpec) ->
     current = state(
         devices={
             "nixant-mount-workspace": MOUNT,
-            "nixant-mount-data": {"type": "disk", **mount_device("/d", "/data", False)},
+            "nixant-mount-data": {
+                "type": "disk",
+                **mount_device(MountSpec("data", "/d", "/data")),
+            },
         }
     )
     assert [(c.op, c.key) for c in plan(spec, current)] == [
@@ -192,8 +204,14 @@ def test_swapped_targets_are_removed_and_re_added(spec: MachineSpec) -> None:
     )
     current = state(
         devices={
-            "nixant-mount-a": {"type": "disk", **mount_device("/a", "/x", False)},
-            "nixant-mount-b": {"type": "disk", **mount_device("/b", "/y", False)},
+            "nixant-mount-a": {
+                "type": "disk",
+                **mount_device(MountSpec("a", "/a", "/x")),
+            },
+            "nixant-mount-b": {
+                "type": "disk",
+                **mount_device(MountSpec("b", "/b", "/y")),
+            },
         }
     )
     changes = plan(spec, current)
@@ -205,6 +223,51 @@ def test_swapped_targets_are_removed_and_re_added(spec: MachineSpec) -> None:
     ]
     assert changes[2].values["path"] == "/y"
     assert changes[2].values["source"] == "/a"
+
+
+@pytest.mark.parametrize(
+    ("key", "old_value"),
+    [
+        ("source", "/old-checkout"),
+        ("path", "/old-workspace"),
+        ("readonly", "true"),
+        ("shift", "false"),
+    ],
+)
+def test_changed_mount_key_is_updated_in_place(
+    spec: MachineSpec, key: str, old_value: str
+) -> None:
+    changes = plan(
+        spec, state(devices={"nixant-mount-workspace": {**MOUNT, key: old_value}})
+    )
+    assert [(c.op, c.key, dict(c.values)) for c in changes] == [
+        ("device-set", "nixant-mount-workspace", {key: MOUNT[key]})
+    ]
+
+
+def test_missing_readonly_means_writable(spec: MachineSpec) -> None:
+    device = {k: v for k, v in MOUNT.items() if k != "readonly"}
+    assert plan(spec, state(devices={"nixant-mount-workspace": device})) == []
+
+
+@pytest.mark.parametrize("source", ["relative", "/nonexistent/nixant-mount-test"])
+def test_check_mount_needs_an_existing_absolute_source(source: str) -> None:
+    with pytest.raises(NixantError, match="existing absolute source"):
+        check_mount(MountSpec("workspace", source, "/workspace"))
+
+
+@pytest.mark.parametrize("name", ["", "a/b", "a\0b"])
+def test_check_mount_rejects_bad_names(name: str, tmp_path: Path) -> None:
+    with pytest.raises(NixantError, match="invalid mount name"):
+        check_mount(MountSpec(name, str(tmp_path), "/workspace"))
+
+
+def test_remount_detaches_then_attaches_the_planned_device() -> None:
+    mount = MountSpec("data", "/d", "/data", read_only=True)
+    assert [(c.op, c.key, dict(c.values)) for c in remount(mount)] == [
+        ("device-remove", "nixant-mount-data", {}),
+        ("device-add", "nixant-mount-data", mount_device(mount)),
+    ]
 
 
 def test_vm_mounts_limits_are_live(spec: MachineSpec) -> None:

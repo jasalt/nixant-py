@@ -115,18 +115,16 @@ def adopt(
     rebase_mounts(provider, state.name, state.devices, old_root, root)
     if state.status == "Running":
         # A running VM drops a retargeted mount until virtiofs is re-plugged.
-        for device, source in mount_moves(state.devices, old_root, root).items():
-            settings = state.devices[device]
-            provider.ensure_mount(
-                state.name,
-                MountSpec(
-                    device.removeprefix(MOUNT_PREFIX),
-                    source,
-                    settings.get("path", ""),
-                    settings.get("readonly") == "true",
-                ),
-                verify=True,
+        moved = [
+            MountSpec(
+                device.removeprefix(MOUNT_PREFIX),
+                source,
+                state.devices[device].get("path", ""),
+                state.devices[device].get("readonly") == "true",
             )
+            for device, source in mount_moves(state.devices, old_root, root).items()
+        ]
+        provider.verify_mounts(state.name, moved)
     provider.set_metadata(
         state.name,
         {PREFIX + "project": project_id(root), PREFIX + "root": str(root)},

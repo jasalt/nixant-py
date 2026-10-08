@@ -9,10 +9,11 @@ from typer.testing import CliRunner
 
 from nixant.cli import app, parse_duration
 from nixant.errors import NixantError, UsageError
-from nixant.models import MachineSpec, MachineState, PortSpec
+from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
 from nixant.nix.activate import can_skip
 from nixant.nix.eval import Evaluation
 from nixant.ownership import PREFIX
+from nixant.planner import mount_device, plan
 from nixant.providers.incus import IncusProvider
 from nixant.run import Runner
 
@@ -61,7 +62,7 @@ def test_up_order(deploy: dict[str, Mock]) -> None:
         < calls.index("provider.start")
         < calls.index("wait_ready")
     )
-    assert calls.index("provider.ensure_mount") < calls.index("activate")
+    assert calls.index("provider.verify_mounts") < calls.index("activate")
     assert deploy["activate"].call_args.kwargs["timeout"] == 300
 
 
@@ -108,7 +109,7 @@ def test_rebuild_always_activates_without_mount_changes(
     deploy["activate"].assert_called_once()
     deploy["can_skip"].assert_not_called()
     deploy["provider"].create.assert_not_called()
-    deploy["provider"].ensure_mount.assert_not_called()
+    deploy["provider"].verify_mounts.assert_not_called()
 
 
 def test_rebuild_missing(deploy: dict[str, Mock]) -> None:
@@ -306,6 +307,88 @@ def test_up_creates_with_a_smaller_disk_than_the_profile(
         argv[1:3] == ["config", "device"] and "root" in argv
         for argv in fresh_deploy.calls
     )
+
+
+def test_up_attaches_mounts_only_through_the_planner(
+    deploy: dict[str, Mock], fresh_deploy: FakeIncus, tmp_path: Path
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    original = deploy["evaluate"].return_value
+    mounts = (
+        *original.spec.mounts,
+        MountSpec("data", str(data), "/data", read_only=True),
+    )
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, mounts=mounts)
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    device_calls = [argv[3:6] for argv in fresh_deploy.calls if argv[2:3] == ["device"]]
+    # One add per mount, in planner order, and verification attached nothing.
+    assert device_calls == [
+        ["add", "local:test-dev", "nixant-mount-data"],
+        ["add", "local:test-dev", "nixant-mount-workspace"],
+    ]
+    assert fresh_deploy.data is not None
+    assert fresh_deploy.data["devices"]["nixant-mount-data"] == {
+        "type": "disk",
+        **mount_device(mounts[1]),
+    }
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["rename", "retarget", "readonly", "swap"],
+)
+def test_planned_mounts_converge_in_one_pass(
+    deploy: dict[str, Mock], running_deploy: dict, tmp_path: Path, change: str
+) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+    running_deploy["devices"]["nixant-mount-other"] = {
+        "type": "disk",
+        "source": str(other),
+        "path": "/other-mount",
+        "shift": "true",
+        "readonly": "false",
+    }
+    workspace = MountSpec("workspace", str(tmp_path), "/workspace")
+    second = MountSpec("other", str(other), "/other-mount")
+    mounts = {
+        "rename": (replace(workspace, name="code"), second),
+        "retarget": (replace(workspace, target="/elsewhere"), second),
+        "readonly": (replace(workspace, read_only=True), second),
+        "swap": (
+            replace(workspace, target="/other-mount"),
+            replace(second, target="/workspace"),
+        ),
+    }[change]
+    original = deploy["evaluate"].return_value
+    spec = replace(original.spec, mounts=mounts, workdir="/")
+    deploy["evaluate"].return_value = replace(original, spec=spec)
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    # Nothing is left for a second pass, so no path can undo the planner.
+    assert plan(spec, deploy["resolve"]()) == []
+
+
+def test_invalid_mount_is_rejected_before_building(
+    deploy: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = deploy["evaluate"].return_value
+    bad = replace(original.spec.mounts[0], name="a/b")
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, mounts=(bad,))
+    )
+    monkeypatch.setattr(
+        "nixant.deploy.resolve_mount_sources", Mock(return_value={"a/b": Path("/")})
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 1
+    assert "invalid mount name" in result.output
+    deploy["build"].assert_not_called()
+    assert deploy["provider"].mock_calls == []
 
 
 def test_up_reports_a_quota_error_at_creation(

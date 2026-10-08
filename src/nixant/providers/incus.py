@@ -4,14 +4,13 @@ import json
 import re
 import subprocess
 import time
-from collections.abc import Mapping
-from pathlib import Path
+from collections.abc import Mapping, Sequence
 from typing import Any, BinaryIO
 from urllib.parse import quote
 
 from nixant.errors import CommandError, NixantError
 from nixant.models import MachineSpec, MachineState, MountSpec, Snapshot
-from nixant.planner import MOUNT_PREFIX, PORT_PREFIX, Change
+from nixant.planner import PORT_PREFIX, Change, remount
 from nixant.run import Runner
 
 # Polls of /proc/mounts, 0.5s apart, before a missing mount is re-added.
@@ -92,9 +91,7 @@ class IncusProvider:
         return [_state(item) for item in data]
 
     def create(self, spec: MachineSpec, metadata: Mapping[str, str]) -> None:
-        # Validate mounts before creating an instance, including direct API callers.
-        for mount in spec.mounts:
-            self._mount_args(mount)
+        """Create the stopped instance; reconciliation then attaches its mounts."""
         argv = [
             "incus",
             "create",
@@ -117,8 +114,6 @@ class IncusProvider:
             # requested size look like a shrink.
             argv.extend(["-d", f"root,size={spec.disk_bytes}"])
         self.runner.run(argv)
-        for mount in spec.mounts:
-            self.ensure_mount(spec.instance_name, mount)
 
     def start(self, name: str) -> None:
         self.runner.run(["incus", "start", _local(name)])
@@ -162,21 +157,6 @@ class IncusProvider:
                     *[f"{k}={v}" for k, v in sorted(metadata.items())],
                 ]
             )
-
-    @staticmethod
-    def _mount_args(mount: MountSpec) -> list[str]:
-        if not mount.name or "/" in mount.name or "\0" in mount.name:
-            raise NixantError("invalid mount name")
-        if not Path(mount.source).is_absolute() or not Path(mount.source).exists():
-            raise NixantError(
-                f"mount {mount.name} requires an existing absolute source"
-            )
-        return [
-            f"source={mount.source}",
-            f"path={mount.target}",
-            "shift=true",
-            f"readonly={'true' if mount.read_only else 'false'}",
-        ]
 
     def apply(self, name: str, change: Change) -> None:
         """Run one planned change; the planner has already decided it is live."""
@@ -283,63 +263,21 @@ class IncusProvider:
     def snapshot_restore(self, name: str, snapshot: str) -> None:
         self.runner.run(["incus", "snapshot", "restore", _local(name), snapshot])
 
-    def ensure_mount(
-        self, name: str, mount: MountSpec, *, verify: bool = False
-    ) -> None:
-        args = self._mount_args(mount)
-        device = f"{MOUNT_PREFIX}{mount.name}"
-        state = self.inspect(name)
-        if state is None:
-            raise NixantError(f"instance {name} disappeared")
-        desired = dict(item.split("=", 1) for item in args)
-        actual = state.devices.get(device)
-        if actual is not None:
-            if actual.get("type") != "disk":
-                raise NixantError(f"{device} exists but is not a disk device")
-            if any(
-                actual.get(key, "false" if key == "readonly" else "") != value
-                for key, value in desired.items()
-            ):
-                self.runner.run(
-                    ["incus", "config", "device", "set", _local(name), device, *args]
-                )
-        else:
-            self.runner.run(
-                [
-                    "incus",
-                    "config",
-                    "device",
-                    "add",
-                    _local(name),
-                    device,
-                    "disk",
-                    *args,
-                ]
-            )
-        if not verify:
-            return
-        for attempt in range(3):
-            if self._mounted(name, mount.target):
-                return
-            if attempt < 2:
-                self.runner.run(
-                    ["incus", "config", "device", "remove", _local(name), device]
-                )
-                self.runner.run(
-                    [
-                        "incus",
-                        "config",
-                        "device",
-                        "add",
-                        _local(name),
-                        device,
-                        "disk",
-                        *args,
-                    ]
-                )
-        raise NixantError(
-            f"mount {mount.name} did not appear at {mount.target} in {name}"
-        )
+    def verify_mounts(self, name: str, mounts: Sequence[MountSpec]) -> None:
+        """Wait for each mount in the guest, re-attaching one that never appears.
+
+        Device state is the planner's job; this only checks /proc/mounts.
+        """
+        for mount in mounts:
+            for attempt in range(3):
+                if self._mounted(name, mount.target):
+                    break
+                if attempt == 2:
+                    raise NixantError(
+                        f"mount {mount.name} did not appear at {mount.target} in {name}"
+                    )
+                for change in remount(mount):
+                    self.apply(name, change)
 
     def _mounted(self, name: str, target: str) -> bool:
         """Wait for target to be mounted; a VM re-plugs virtiofs asynchronously."""

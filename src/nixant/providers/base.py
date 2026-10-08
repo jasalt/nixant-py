@@ -1,7 +1,7 @@
 """The provider boundary; planning and ownership checks stay outside it."""
 
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import BinaryIO, Protocol
 
 from nixant.models import MachineSpec, MachineState, MountSpec, Snapshot
@@ -25,9 +25,7 @@ class Provider(Protocol):
     def snapshot_list(self, name: str) -> list[Snapshot]: ...
     def snapshot_delete(self, name: str, snapshot: str) -> None: ...
     def snapshot_restore(self, name: str, snapshot: str) -> None: ...
-    def ensure_mount(
-        self, name: str, mount: MountSpec, *, verify: bool = False
-    ) -> None: ...
+    def verify_mounts(self, name: str, mounts: Sequence[MountSpec]) -> None: ...
     def run(
         self,
         name: str,

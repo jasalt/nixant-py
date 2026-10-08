@@ -13,7 +13,7 @@ from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build
 from nixant.nix.eval import evaluate
 from nixant.ownership import PREFIX, metadata, resolve
-from nixant.planner import Change, Effect, plan, validate
+from nixant.planner import Change, Effect, check_mount, plan, validate
 from nixant.project import resolve_mount_sources
 from nixant.providers.incus import IncusProvider
 from nixant.readiness import wait_ready
@@ -40,8 +40,7 @@ def up(
     current = _resolve(provider, root, target, desired)
     state = _converge(provider, root, target, spec, current)
     wait_ready(provider, spec.instance_name, spec.kind, verbose=runner.verbose)
-    for mount in spec.mounts:
-        provider.ensure_mount(spec.instance_name, mount, verify=True)
+    provider.verify_mounts(spec.instance_name, spec.mounts)
     if can_skip(provider, state, system):
         _refresh_runtime(provider, spec, state)
     else:
@@ -91,6 +90,8 @@ def _desired(root: Path, target: str, runner: Runner) -> Desired:
             replace(mount, source=str(sources[mount.name])) for mount in spec.mounts
         ),
     )
+    for mount in spec.mounts:
+        check_mount(mount)
     return Desired(spec, evaluated.drv_path, "git override" if override else "config")
 
 
