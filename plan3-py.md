@@ -670,6 +670,11 @@ cpus/memory/disk limits, ports, multiple and read-only mounts, planner with clas
 
 Snapshots/restore, ephemeral instances, agent-oriented restricted profiles.
 
+Known limits, documented rather than fixed (see `security.md` and the README):
+
+- The agent profile is not a sandbox. The writable workspace includes `.git/hooks`, `.git/config` (`core.hooksPath`, `core.fsmonitor`) and `.envrc`, which host tools, including nixant's own `git` calls, execute as the host user. Hardening follows the order in `security.md`.
+- `null` CPU and memory limits leave the instance's values alone, so switching `isolation` from `"agent"` back keeps its 2 CPU / 4 GiB caps until they are set explicitly or unset with `incus config unset`. Removing limits nixant itself set would need nixant to record which ones those are.
+
 ### Phase 5: second backend
 
 Only if needed. Extract a backend interface from `IncusProvider` then, shaped by what both backends actually share, instead of designing one up front.

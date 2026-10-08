@@ -119,6 +119,10 @@ nixant = {
 
 Violations fail at evaluation time with a message naming the offending option. The profile does not restrict the guest's network access.
 
+The profile reduces the guest's privileges; it is not a sandbox for hostile code. `/workspace` stays writable, including `.git/hooks`, `.git/config` (for example `core.hooksPath` or `core.fsmonitor`) and `.envrc`, and host tools such as git, direnv, editors and nixant's own `git` calls run them as your host user. Review guest-written changes to those files before running host tools in the checkout. [security.md](security.md) describes these and other limits and a hardening order.
+
+Switching `isolation` back from `"agent"` keeps the 2 CPU and 4 GiB caps on an existing instance, since `null` limits are left alone (see Machine settings). Set `cpus` and `memory` explicitly, or remove the caps with `incus config unset local:NAME limits.cpu limits.memory`.
+
 ## Containers and VMs
 
 A target is a container when it imports `nixant.nixosModules.container` and a VM when it imports `nixant.nixosModules.vm` (the stock Incus VM profile with `incus-agent` kept enabled). The kind of an existing instance cannot change; `up` refuses and asks you to destroy it first. VMs use `images:nixos/unstable` with `security.secureboot=false`, and get 180 seconds to become ready.
