@@ -178,7 +178,17 @@ in {
         root = "/var/lib/wordpress";
         pool = config.services.phpfpm.pools.wordpress;
         db = { name = "wordpress"; socket = "/run/mysqld/mysqld.sock"; };
-        wpCli = pkgs.wp-cli.override { php = cfg.phpPackage; };
+        sendmailPath = "${pkgs.mailpit}/bin/mailpit sendmail -S 127.0.0.1:${toString cfg.mailpit.smtpPort}";
+        # wp-cli runs on the module's PHP with its own ini, which needs the same
+        # sendmail_path as PHP-FPM so wp_mail from the CLI reaches Mailpit.
+        wpCli = pkgs.wp-cli.override {
+          php = cfg.phpPackage;
+          phpIniFile = pkgs.writeText "php.ini" ''
+            memory_limit = -1
+            phar.readonly = Off
+            sendmail_path = ${sendmailPath}
+          '';
+        };
         wpSite = pkgs.callPackage ./wp-site.nix { wp-cli = wpCli; };
         uiPort = builtins.filter (port: port.guest == cfg.mailpit.uiPort) config.nixant.ports;
         # Everything wp-site setup needs; a change reruns the setup unit.
@@ -215,6 +225,7 @@ in {
             upload_max_filesize = 64M
             post_max_size = 64M
             memory_limit = 512M
+            sendmail_path = ${sendmailPath}
           '';
           settings = {
             "listen.owner" = user;

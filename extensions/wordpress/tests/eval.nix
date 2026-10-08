@@ -82,6 +82,10 @@ let
     in path {} != path { extra.wordpress.title = "Other"; };
     coreIncludesThemes = builtins.pathExists "${base.package}/wp-content/themes/twentytwentyfive";
     dotfilesHidden = lib.hasInfix "respond @dotfiles 404" base_.config.services.caddy.virtualHosts.":80".extraConfig;
+    fpmSendsMailToMailpit = lib.hasInfix "mailpit sendmail -S 127.0.0.1:1025"
+      base_.config.services.phpfpm.pools.wordpress.phpOptions;
+    mailPortFollowsOption = lib.hasInfix "-S 127.0.0.1:9026"
+      (evaluate { extra.wordpress.mailpit.smtpPort = 9026; }).config.services.phpfpm.pools.wordpress.phpOptions;
     nothingWhenDisabled = !(evaluate { extra.wordpress.enable = lib.mkForce false; }).config.services.caddy.enable;
     defaultsAreDevelopmentOnly = base.admin.user == "admin" && base.wpConfig.WP_DEBUG_DISPLAY == false;
 
