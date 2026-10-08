@@ -84,6 +84,8 @@ let
     dotfilesHidden = lib.hasInfix "respond @dotfiles 404" base_.config.services.caddy.virtualHosts.":80".extraConfig;
     fpmSendsMailToMailpit = lib.hasInfix "mailpit sendmail -S 127.0.0.1:1025"
       base_.config.services.phpfpm.pools.wordpress.phpOptions;
+    opcacheRevalidates = lib.hasInfix "opcache.revalidate_freq = 0"
+      base_.config.services.phpfpm.pools.wordpress.phpOptions;
     mailPortFollowsOption = lib.hasInfix "-S 127.0.0.1:9026"
       (evaluate { extra.wordpress.mailpit.smtpPort = 9026; }).config.services.phpfpm.pools.wordpress.phpOptions;
     wpConfigInSettings = (settingsOf base_).wpConfig.WP_DEBUG == true

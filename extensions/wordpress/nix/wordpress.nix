@@ -269,6 +269,9 @@ in {
             post_max_size = 64M
             memory_limit = 512M
             sendmail_path = ${sendmailPath}
+            ; Edits in the workspace must show up on the next request.
+            opcache.validate_timestamps = 1
+            opcache.revalidate_freq = 0
           '';
           settings = {
             "listen.owner" = user;
