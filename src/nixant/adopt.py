@@ -10,6 +10,7 @@ from nixant.ownership import PREFIX, check_schema
 from nixant.planner import MOUNT_PREFIX, Change, Effect
 from nixant.project import project_id, state_directory
 from nixant.providers.base import Provider
+from nixant.run import Runner
 
 
 def candidates(provider: Provider, target: str) -> list[MachineState]:
@@ -67,10 +68,14 @@ def remap_source(source: str, old_root: str, new_root: Path) -> str:
     return source
 
 
-def adopt(provider: Provider, root: Path, target: str, state: MachineState) -> None:
+def adopt(
+    provider: Provider, runner: Runner, root: Path, target: str, state: MachineState
+) -> None:
     check_schema(state)
     old_root = state.config.get(PREFIX + "root", "")
     old_id = state.config.get(PREFIX + "project", "")
+    # Protect the closure under the new name before changing anything else.
+    retired = _register_gcroot(old_id, root, target, runner)
     for device, settings in sorted(state.devices.items()):
         if not device.startswith(MOUNT_PREFIX):
             continue
@@ -91,15 +96,33 @@ def adopt(provider: Provider, root: Path, target: str, state: MachineState) -> N
         state.name,
         {PREFIX + "project": project_id(root), PREFIX + "root": str(root)},
     )
-    _move_gcroot(old_id, root, target)
+    if retired is not None:
+        try:
+            retired.unlink(missing_ok=True)
+        except OSError as exc:
+            raise NixantError(f"cannot remove old GC root {retired}: {exc}") from exc
 
 
-def _move_gcroot(old_id: str, root: Path, target: str) -> None:
+def _register_gcroot(
+    old_id: str, root: Path, target: str, runner: Runner
+) -> Path | None:
+    """Register the old link's system under the new link; return the old link.
+
+    Nix records an out-link indirectly, by the link's own pathname, so renaming
+    the link would leave that record dangling and the closure unprotected.
+    """
     old = state_directory() / "gcroots" / f"{old_id}-{target}"
     new = gcroot_path(root, target)
+    if old == new or not old.is_symlink():
+        return None
+    if not old.exists():
+        return old  # already collected; nothing left to protect
+    system = os.readlink(old)
     try:
-        if old != new and old.is_symlink():
-            new.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(old, new)
-    except OSError as exc:
-        raise NixantError(f"cannot move GC root {old}: {exc}") from exc
+        new.parent.mkdir(parents=True, exist_ok=True)
+        runner.run(["nix", "build", system, "--out-link", str(new)], capture=True)
+    except (OSError, NixantError) as exc:
+        raise NixantError(
+            f"cannot register GC root {new} for {system}; nothing was changed: {exc}"
+        ) from exc
+    return old

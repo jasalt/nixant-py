@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from nixant.adopt import adopt, candidates, choose, remap_source
 from nixant.cli import app
-from nixant.errors import NixantError
+from nixant.errors import CommandError, NixantError
 from nixant.models import SCHEMA_VERSION, MachineState
 from nixant.ownership import PREFIX
 from nixant.project import project_id
@@ -103,15 +103,66 @@ def test_choose_named_instance_refusals(tmp_path: Path) -> None:
     assert choose(provider, tmp_path, "dev", "x").name == "x"
 
 
-def test_adopt_rewrites_metadata_mounts_and_gcroot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+class FakeNix:
+    """Registers out-links indirectly by pathname, like gcroots/auto."""
+
+    def __init__(self, auto: Path) -> None:
+        self.auto = auto
+        self.auto.mkdir(parents=True, exist_ok=True)
+        self.fail = False
+        self.calls: list[list[str]] = []
+
+    def register(self, link: Path, system: Path) -> None:
+        link.symlink_to(system)
+        (self.auto / str(len(list(self.auto.iterdir())))).symlink_to(link)
+
+    def run(self, argv: list[str], **kwargs: object) -> object:
+        self.calls.append(argv)
+        if self.fail:
+            raise CommandError(argv, 1, b"cannot add root")
+        assert argv[:2] == ["nix", "build"] and argv[3] == "--out-link"
+        link = Path(argv[4])
+        link.unlink(missing_ok=True)
+        self.register(link, Path(argv[2]))
+        return Mock(returncode=0, stdout=b"")
+
+    def protected(self) -> set[Path]:
+        """Store paths reachable from a live registration, as the GC sees them."""
+        return {
+            entry.resolve()
+            for entry in self.auto.iterdir()
+            if entry.readlink().is_symlink() and entry.resolve().exists()
+        }
+
+
+@pytest.fixture
+def moved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     old, new = tmp_path / "old", tmp_path / "new"
     new.mkdir()
     gcroots = tmp_path / "state" / "nixant" / "gcroots"
     gcroots.mkdir(parents=True)
-    (gcroots / f"{project_id(old)}-dev").symlink_to("/nix/store/x-system")
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "system").mkdir()
+    (store / "other").mkdir()
+    nix = FakeNix(tmp_path / "auto")
+    nix.register(gcroots / f"{project_id(old)}-dev", store / "system")
+    nix.register(gcroots / "unrelated-dev", store / "other")
+    runner = Mock()
+    runner.run.side_effect = nix.run
+    return {
+        "old": old,
+        "new": new,
+        "gcroots": gcroots,
+        "store": store,
+        "nix": nix,
+        "runner": runner,
+    }
+
+
+def test_adopt_rewrites_metadata_mounts_and_gcroot(moved: dict) -> None:
+    old, new, gcroots = moved["old"], moved["new"], moved["gcroots"]
     state = instance(
         "lost",
         old,
@@ -123,7 +174,7 @@ def test_adopt_rewrites_metadata_mounts_and_gcroot(
         },
     )
     provider = Mock()
-    adopt(provider, new, "dev", state)
+    adopt(provider, moved["runner"], new, "dev", state)
     changes = {c.args[1].key: c.args[1] for c in provider.apply.call_args_list}
     assert set(changes) == {"nixant-mount-workspace", "nixant-mount-sub"}
     assert changes["nixant-mount-workspace"].values == {"source": str(new)}
@@ -132,19 +183,56 @@ def test_adopt_rewrites_metadata_mounts_and_gcroot(
         "lost", {PREFIX + "project": project_id(new), PREFIX + "root": str(new)}
     )
     assert not (gcroots / f"{project_id(old)}-dev").is_symlink()
-    assert (gcroots / f"{project_id(new)}-dev").is_symlink()
+    link = gcroots / f"{project_id(new)}-dev"
+    assert link.resolve() == moved["store"] / "system"
+    # Still protected through a registration of the new link itself.
+    assert link in {entry.readlink() for entry in moved["nix"].auto.iterdir()}
+    assert moved["nix"].protected() == {
+        moved["store"] / "system",
+        moved["store"] / "other",
+    }
+    assert (gcroots / "unrelated-dev").resolve() == moved["store"] / "other"
+
+
+def test_adopt_keeps_the_old_root_when_registration_fails(moved: dict) -> None:
+    moved["nix"].fail = True
+    provider = Mock()
+    with pytest.raises(NixantError, match="nothing was changed"):
+        adopt(
+            provider, moved["runner"], moved["new"], "dev", instance("l", moved["old"])
+        )
+    provider.apply.assert_not_called()
+    provider.set_metadata.assert_not_called()
+    old = moved["gcroots"] / f"{project_id(moved['old'])}-dev"
+    assert old.resolve() == moved["store"] / "system"
+    assert moved["store"] / "system" in moved["nix"].protected()
+
+
+def test_adopt_drops_an_already_collected_root(moved: dict) -> None:
+    (moved["store"] / "system").rmdir()
+    adopt(Mock(), moved["runner"], moved["new"], "dev", instance("l", moved["old"]))
+    assert moved["nix"].calls == []
+    assert not (moved["gcroots"] / f"{project_id(moved['old'])}-dev").is_symlink()
+    assert not (moved["gcroots"] / f"{project_id(moved['new'])}-dev").is_symlink()
 
 
 def test_adopt_without_gcroot_and_schema_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    provider = Mock()
-    adopt(provider, tmp_path, "dev", instance("lost", tmp_path / "gone"))
+    provider, runner = Mock(), Mock()
+    adopt(provider, runner, tmp_path, "dev", instance("lost", tmp_path / "gone"))
     provider.set_metadata.assert_called_once()
+    runner.run.assert_not_called()
     provider = Mock()
     with pytest.raises(NixantError, match="schema"):
-        adopt(provider, tmp_path, "dev", instance("l", tmp_path / "g", schema="99"))
+        adopt(
+            provider,
+            runner,
+            tmp_path,
+            "dev",
+            instance("l", tmp_path / "g", schema="99"),
+        )
     provider.set_metadata.assert_not_called()
     provider.apply.assert_not_called()
 

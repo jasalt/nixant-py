@@ -545,14 +545,15 @@ def adopt(
 ) -> None:
     """Attach an instance whose checkout moved to this checkout."""
     root = discover_project()
-    provider = IncusProvider(ctx.obj["runner"])
+    runner = ctx.obj["runner"]
+    provider = IncusProvider(runner)
     with target_lock(root, target):
         current = lookup(provider, root, target, require_schema=False)
         if current is not None:
             typer.echo(f"{current.name}: already belongs to this checkout")
             return
         state = choose(provider, root, target, instance)
-        adopt_instance(provider, root, target, state)
+        adopt_instance(provider, runner, root, target, state)
         typer.echo(f"{state.name}: adopted by {root}")
 
 
