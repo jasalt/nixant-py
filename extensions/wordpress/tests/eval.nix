@@ -97,6 +97,9 @@ let
       settings = settingsOf (evaluate { extra.wordpress.mailFrom = "dev@client.test"; });
       plugin = builtins.readFile (builtins.unsafeDiscardStringContext settings.muPlugin);
     in lib.hasInfix "wp_mail_from" plugin && lib.hasInfix ''"dev@client.test"'' plugin;
+    checkSettingsExported = base_.config.environment.etc."wordpress/site.json".source
+        == base_.config.systemd.services.wordpress-setup.environment.WP_SITE_SETTINGS
+      && (settingsOf base_).mailpit.uiPort == 8025;
     badConstantName = fails "PHP constant names" { extra.wordpress.wpConfig."BAD NAME" = true; };
     componentsInSettings = let
       settings = settingsOf (evaluate { extra.wordpress = {

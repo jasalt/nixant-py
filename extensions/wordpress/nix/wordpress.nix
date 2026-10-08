@@ -224,6 +224,7 @@ in {
           inherit (cfg) title url admin wpConfig plugins themes activeTheme;
           workspace = config.nixant.mounts.workspace.target;
           muPlugin = "${muPlugin}";
+          mailpit = { inherit (cfg.mailpit) uiPort smtpPort; };
           core = "${cfg.package}";
           coreId = builtins.baseNameOf "${cfg.package}";
           db = db // { user = user; };
@@ -242,6 +243,8 @@ in {
         # /etc/profile, which exports WP_CLI_CONFIG_PATH.
         environment.systemPackages = [ wpCli wpSite ];
         environment.etc."wp-cli/config.yml".text = "path: ${root}\n";
+        # `wp-site check` finds the settings here when run by hand.
+        environment.etc."wordpress/site.json".source = settingsFile;
         environment.variables.WP_CLI_CONFIG_PATH = "/etc/wp-cli/config.yml";
 
         systemd.tmpfiles.rules = [ "d ${root} 0750 ${user} ${group} - -" ];

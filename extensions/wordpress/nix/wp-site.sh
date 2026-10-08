@@ -15,7 +15,9 @@ setting() {
 }
 
 load_settings() {
-  : "${WP_SITE_SETTINGS:?WP_SITE_SETTINGS must name the generated settings file}"
+  # The module exports the generated settings at this path for manual runs.
+  WP_SITE_SETTINGS=${WP_SITE_SETTINGS:-/etc/wordpress/site.json}
+  [ -r "$WP_SITE_SETTINGS" ] || die "settings file $WP_SITE_SETTINGS is not readable"
   root=$(setting .root)
   core=$(setting .core)
   core_id=$(setting .coreId)
@@ -26,6 +28,7 @@ load_settings() {
   admin_email=$(setting .admin.email)
   workspace=$(setting .workspace)
   mu_plugin=$(setting .muPlugin)
+  mailpit_ui_port=$(setting .mailpit.uiPort)
   db_name=$(setting .db.name)
   db_user=$(setting .db.user)
   db_socket=$(setting .db.socket)
@@ -202,8 +205,69 @@ setup() {
   report
 }
 
+# check: verify a running site. Each step names itself on failure, and the
+# first failure ends the run with a non-zero status.
+fail() {
+  die "check failed: $1: $2"
+}
+
+check_core() {
+  local installed=
+  [ -e "$root/.core-version" ] && installed=$(<"$root/.core-version")
+  [ "$installed" = "$core_id" ] || fail core "installed '$installed', configured '$core_id'"
+}
+
+check_installed() {
+  wp core is-installed || fail installed "wp core is-installed reports no installation"
+}
+
+check_plugins() {
+  local slug
+  while read -r slug; do
+    wp plugin is-active "$slug" || fail plugins "$slug is not active"
+  done < <(jq -r '.plugins | to_entries[] | select(.value.activate) | .key' "$WP_SITE_SETTINGS")
+}
+
+# The site URL names a host port that is not reachable from inside the guest,
+# so ask the local web server for it with the configured Host header.
+check_http() {
+  local host=${url#http://} code admin location
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host" http://127.0.0.1/) || true
+  [ "$code" = 200 ] || fail front-page "GET / returned '$code', expected 200"
+  admin=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $host" http://127.0.0.1/wp-admin/ || true)
+  code=${admin%% *}
+  location=${admin#* }
+  [ "$code" = 302 ] && [[ "$location" == */wp-login.php* ]] \
+    || fail admin "GET /wp-admin/ returned '$code' to '$location', expected a redirect to wp-login.php"
+}
+
+# Send a message through WordPress and find it in Mailpit's API.
+check_mail() {
+  local api="http://127.0.0.1:$mailpit_ui_port/api/v1" subject id='' tries=0
+  curl -fs "$api/info" >/dev/null || fail mailpit "API not reachable on port $mailpit_ui_port"
+  subject="wp-site check $(date +%s%N)"
+  CHECK_SUBJECT=$subject wp eval 'exit( wp_mail( "check@example.test", getenv( "CHECK_SUBJECT" ), "wp-site check" ) ? 0 : 1 );' \
+    || fail mail "wp_mail returned false"
+  while [ -z "$id" ] && [ "$tries" -lt 10 ]; do
+    id=$(curl -fs "$api/messages" | jq -r --arg subject "$subject" '.messages[] | select(.Subject == $subject) | .ID' | head -n1)
+    tries=$((tries + 1))
+    [ -n "$id" ] || sleep 1
+  done
+  [ -n "$id" ] || fail mail "message '$subject' did not reach Mailpit"
+  curl -fs -X DELETE -H 'Content-Type: application/json' -d "{\"IDs\":[\"$id\"]}" "$api/messages" >/dev/null
+}
+
+check() {
+  load_settings
+  local step
+  for step in core installed plugins http mail; do
+    "check_$step"
+    echo "ok: $step"
+  done
+}
+
 case "${1:-}" in
   setup) setup ;;
-  check) die "check is not implemented yet" ;;
+  check) check ;;
   *) die "usage: wp-site setup|check" ;;
 esac
