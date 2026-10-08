@@ -18,6 +18,11 @@
       nixosModules.wordpress = import ./nix/wordpress.nix;
       nixosModules.default = self.nixosModules.wordpress;
 
+      templates.default = {
+        path = ./templates/default;
+        description = "WordPress development site on a nixant container";
+      };
+
       packages.${system} = {
         inherit wp-site;
         default = wp-site;
@@ -28,6 +33,15 @@
           results = builtins.toJSON (import ./tests/eval.nix {
             inherit nixpkgs system nixant;
             wordpress = self.nixosModules.wordpress;
+          });
+        } ''
+          echo "$results" > "$out"
+        '';
+        template = pkgs.runCommand "nixant-wp-template-tests" {
+          results = builtins.toJSON (import ./tests/template.nix {
+            inherit nixpkgs system nixant;
+            nixant-wp = self;
+            template = ./templates/default;
           });
         } ''
           echo "$results" > "$out"
