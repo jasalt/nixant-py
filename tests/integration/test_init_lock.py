@@ -101,6 +101,7 @@ def test_clean_build_pins_the_project_to_its_revision(tmp_path: Path) -> None:
         f"{CANONICAL}/{head}",
     ]
     assert f"locked nixant to {head}" in result.stdout
+    assert "only evaluates on this machine" not in result.stderr
     nodes = lock_nodes(root)
     assert nodes["nixant"]["locked"]["rev"] == head
     assert nodes["nixant"]["inputs"]["nixpkgs"] == ["nixpkgs"]
@@ -127,6 +128,7 @@ def test_dirty_build_points_the_project_at_its_own_source(tmp_path: Path) -> Non
     assert f'nixant.url = "path:{self_store}";' in (root / "flake.nix").read_text()
     assert json.loads(log.read_text()) == ["flake", "lock"]
     assert "locked inputs" in result.stdout
+    assert f"nixant.url is path:{self_store}" in result.stderr
     nodes = lock_nodes(root)
     assert nodes["nixant"]["locked"]["type"] == "path"
     assert nodes["nixant"]["locked"]["path"] == self_store

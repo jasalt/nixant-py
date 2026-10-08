@@ -156,6 +156,7 @@ def init_project(
         print("flake.nix already exists; nothing was written.")
         print("Add the following by hand:\n")
         print(render(snippet.read_text(), name, url), end="")
+        _warn_if_local(url)
         return
 
     before = _files(directory)
@@ -173,6 +174,7 @@ def init_project(
             path.write_text(rendered)
     names = [str(path) for path in created]
     print(f"wrote {' '.join(names)} (instanceName: {name})")
+    _warn_if_local(url)
 
     tracked = in_git_work_tree(directory, runner)
     if tracked:
@@ -199,6 +201,17 @@ def init_project(
             file=sys.stderr,
         )
     print("next: nixant up")
+
+
+def _warn_if_local(url: str) -> None:
+    """A build without a revision can only point projects at its own source."""
+    if url.startswith("path:"):
+        print(
+            f"warning: nixant.url is {url}, this CLI's local source; the project "
+            "only evaluates on this machine. Use a clean nixant build, or set "
+            "NIXANT_FLAKE_URL (and NIXANT_REV) to a URL others can fetch",
+            file=sys.stderr,
+        )
 
 
 def _lock(

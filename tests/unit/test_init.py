@@ -121,9 +121,13 @@ def test_init_writes_rewrites_locks_and_stages(
     assert "wrote flake.nix nix/dev.nix (instanceName: shop-dev)" in captured.out
     assert "next: nixant up" in captured.out
     assert "not to this CLI" not in captured.err
+    assert f"nixant.url is path:{REPO}" in captured.err
+    assert "only evaluates on this machine" in captured.err
 
 
-def test_init_pins_revision_with_canonical_url(tmp_path: Path) -> None:
+def test_init_pins_revision_with_canonical_url(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The environment of a clean package build: canonical URL and revision."""
     runner = fake_runner(tmp_path)
     env = {
@@ -143,6 +147,7 @@ def test_init_pins_revision_with_canonical_url(tmp_path: Path) -> None:
         "github:o/r/abc",
     ] in commands(runner)
     assert 'nixant.url = "github:o/r";' in (tmp_path / "flake.nix").read_text()
+    assert "only evaluates on this machine" not in capsys.readouterr().err
 
 
 def test_url_override_without_revision_warns(
@@ -200,10 +205,12 @@ def test_init_existing_flake_prints_snippet(
     init_project(tmp_path, "default", runner, Mock(), {"NIXANT_SELF": str(REPO)})
     assert (tmp_path / "flake.nix").read_text() == "{}"
     assert not any(c[:3] == ["nix", "flake", "init"] for c in commands(runner))
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out
     assert "nixant.nixosModules.container" in out
     assert f"{tmp_path.name.lower()}-dev".replace("_", "-").replace(".", "-") in out
     assert "nixant-template" not in out
+    assert "only evaluates on this machine" in captured.err
 
 
 def test_init_unknown_template_lists_available(tmp_path: Path) -> None:

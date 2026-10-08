@@ -38,7 +38,7 @@ Name: `nixant` (CLI, Python package, NixOS options, metadata keys, flake outputs
 | 19 | SSH agent, git identity | Out of scope |
 | 20 | Concurrency | Per-target lock file for mutating commands |
 | 21 | Distribution | Nix only; package bakes in its own source path and revision |
-| 22 | Version pin | Template keeps an unversioned `nixant.url`; `init` locks it to the CLI's revision via `--override-input` |
+| 22 | Version pin | `init` writes the canonical unversioned `nixant.url` and locks it to the CLI's revision via `--override-input`; a build without a revision writes its own `path:` source instead and warns |
 | 23 | Activation bound | Default 30-minute deadline; `up`/`rebuild --timeout DURATION` overrides it; no unlimited CLI mode |
 | 24 | Reboot-required switch | Exit 100 → automatic `incus restart`, then verify and record |
 | 25 | Guest-side Nix | Supported: flakes enabled, user trusted, nesting required (verified) |
@@ -282,11 +282,12 @@ next: nixant up
 - **Instance name:** sets `nixant.instanceName` to `<dir>-dev`. Templates carry the marker value `"nixant-template-dev"`, which keeps every template evaluable in `nix flake check`; `init` rewrites that string literal.
   - The proposal is sanitized: lowercase; runs outside `[a-z0-9]` become `-`; leading digits and dashes are stripped (prefix `n` if nothing remains); truncated to 63 chars without a trailing dash.
   - If an Incus instance with that name already exists, `init` warns and suggests editing the name before `up`.
-- **Lock, pinned to the CLI's revision:** `nix flake lock --override-input nixant github:…/nixant/$NIXANT_REV`.
-  - `flake.nix` keeps the unversioned `nixant.url`, while the lock records this revision. Later evaluations and plain `nix flake lock` keep it, and `nix flake update nixant` upgrades normally (tested with local repos).
-  - Project and CLI therefore match at creation; `schemaVersion` guards later drift, with an error suggesting `nix flake update nixant` or a matching CLI.
-  - This step needs network access (nixpkgs is fetched). If it fails, the written files stay and `init` prints the exact lock command to run later.
-  - With an empty `NIXANT_REV` (a dirty dev build), it does a plain `nix flake lock` and warns that the project is pinned to the latest nixant, not to this CLI.
+- **nixant URL:** templates and snippets carry the marker `"nixant-template-url"`, and `init` replaces it according to how the CLI was built (see Packaging):
+  - **Clean build** (`NIXANT_FLAKE_URL` and `NIXANT_REV` set, e.g. `nix run github:jasalt/nixant-py`): writes the canonical unversioned URL `github:jasalt/nixant-py` and locks it to the CLI's revision with `nix flake lock --override-input nixant github:jasalt/nixant-py/$NIXANT_REV`. `flake.nix` keeps the unversioned URL while the lock records this revision; later evaluations and plain `nix flake lock` keep it, and `nix flake update nixant` upgrades normally (tested with local repos). Project and CLI therefore match at creation; `schemaVersion` guards later drift, with an error suggesting `nix flake update nixant` or a matching CLI.
+  - **Build without a revision** (dirty tree, dev shell; `NIXANT_REV` empty, no `NIXANT_FLAKE_URL`): writes `path:$NIXANT_SELF`, the CLI's own source, and does a plain `nix flake lock`. That project only evaluates on this machine, so `init` warns and suggests a clean build or `NIXANT_FLAKE_URL`.
+  - **User override:** `NIXANT_FLAKE_URL` (with or without `NIXANT_REV`) replaces the URL on a build without a revision; `github:`, `gitlab:`, `sourcehut:` and `git+*://` URLs can be pinned, anything else is rejected before files are written. A URL without a revision gets a plain lock and the warning that the project is pinned to the latest nixant, not to this CLI. A clean build's wrapper forces its own URL and revision.
+  - Known gap: the marker is not a fetchable URL, so a plain `nix flake init -t …#default` without `nixant init` needs `nixant.url` set by hand.
+- **Lock:** needs network access (nixpkgs is fetched). If it fails, the written files stay and `init` prints the exact lock command to run later.
 - **Git:** makes sure the created files and `flake.lock` are tracked if the directory is a git work tree. Outside git, prints the whole-directory-copy warning and suggests `git init`.
 - **Existing `flake.nix`:** nothing is written. It prints the inputs (with `follows`) and a `nixosConfigurations.dev` block, with the proposed `instanceName` filled in, to add by hand. The snippets ship next to the templates.
 - **Unknown template:** error listing the available names.
@@ -635,6 +636,7 @@ Target size for Phases 1–2: ≤2k lines of Python excluding tests.
 - **Baked-in source** (used by `init`). `makeWrapperArgs` sets:
   - `NIXANT_SELF=${self}`: the flake's own source store path, from which `init` copies templates and snippets.
   - `NIXANT_REV=${self.rev or ""}`: used to pin the project's lock at birth.
+  - `NIXANT_FLAKE_URL=github:jasalt/nixant-py`, only when `self.rev` exists: the canonical URL a clean build writes into new projects. A build without a revision has no published revision to pin, so `init` points the project at `NIXANT_SELF` instead (see `init`).
 
   Unset `NIXANT_SELF` makes `init` fail with `init needs the Nix-packaged nixant`. The dev shell sets it to the checkout.
 - **Host tools are not wrapped.** `incus`, `nix`, and `git` come from the host `PATH`, because the incus client must match the host daemon and nix must talk to the host's daemon. The CLI checks for them at startup and names any that are missing.
