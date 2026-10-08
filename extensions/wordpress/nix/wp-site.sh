@@ -25,6 +25,7 @@ load_settings() {
   admin_password=$(setting .admin.password)
   admin_email=$(setting .admin.email)
   workspace=$(setting .workspace)
+  mu_plugin=$(setting .muPlugin)
   db_name=$(setting .db.name)
   db_user=$(setting .db.user)
   db_socket=$(setting .db.socket)
@@ -84,6 +85,10 @@ configure() {
       *) wp config set "$key" "$value" ;;
     esac
   done < <(jq -r '.wpConfig | to_entries[] | [.key, (.value | type), (.value | tostring)] | @tsv' "$WP_SITE_SETTINGS")
+}
+
+install_mu_plugin() {
+  install -D -m 0644 "$mu_plugin" "$root/wp-content/mu-plugins/nixant-wp.php"
 }
 
 wait_for_database() {
@@ -187,6 +192,7 @@ setup() {
   trap 'echo "wp-site: setup failed at: $BASH_COMMAND" >&2' ERR
   copy_core
   configure
+  install_mu_plugin
   wait_for_database
   install_site
   converge_urls

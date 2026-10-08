@@ -127,6 +127,16 @@ in {
       '';
     };
 
+    mailFrom = mkOption {
+      type = types.str;
+      default = "wordpress@example.test";
+      description = ''
+        Sender address of WordPress mail. WordPress derives
+        `wordpress@<host>` by default, and `wordpress@localhost` is rejected
+        as invalid, so mail would never reach Mailpit.
+      '';
+    };
+
     mailpit = {
       uiPort = mkOption { type = types.port; default = 8025; description = "Guest port of the Mailpit web UI."; };
       smtpPort = mkOption { type = types.port; default = 1025; description = "Guest port of the Mailpit SMTP server."; };
@@ -202,11 +212,18 @@ in {
         };
         wpSite = pkgs.callPackage ./wp-site.nix { wp-cli = wpCli; };
         uiPort = builtins.filter (port: port.guest == cfg.mailpit.uiPort) config.nixant.ports;
+        # Must-use plugin, installed by setup on every run.
+        muPlugin = pkgs.writeText "nixant-wp.php" ''
+          <?php
+          // Managed by nixant-wp; changes are overwritten on the next setup.
+          add_filter( 'wp_mail_from', function () { return ${builtins.toJSON cfg.mailFrom}; } );
+        '';
         # Everything wp-site setup needs; a change reruns the setup unit.
         settingsFile = pkgs.writeText "wordpress-site.json" (builtins.toJSON {
           inherit root;
           inherit (cfg) title url admin wpConfig plugins themes activeTheme;
           workspace = config.nixant.mounts.workspace.target;
+          muPlugin = "${muPlugin}";
           core = "${cfg.package}";
           coreId = builtins.baseNameOf "${cfg.package}";
           db = db // { user = user; };

@@ -93,6 +93,10 @@ let
       && lib.any (p: (p.pname or "") == "wp-cli") base_.config.environment.systemPackages;
     wpConfigDefaultsMerge = let c = (evaluate { extra.wordpress.wpConfig = { WP_POST_REVISIONS = 3; WP_DEBUG = false; }; }).config.wordpress.wpConfig;
       in c.WP_POST_REVISIONS == 3 && c.WP_DEBUG == false && c.WP_DEBUG_LOG == true && c.WP_DEBUG_DISPLAY == false;
+    mailFromPlugin = let
+      settings = settingsOf (evaluate { extra.wordpress.mailFrom = "dev@client.test"; });
+      plugin = builtins.readFile (builtins.unsafeDiscardStringContext settings.muPlugin);
+    in lib.hasInfix "wp_mail_from" plugin && lib.hasInfix ''"dev@client.test"'' plugin;
     badConstantName = fails "PHP constant names" { extra.wordpress.wpConfig."BAD NAME" = true; };
     componentsInSettings = let
       settings = settingsOf (evaluate { extra.wordpress = {
