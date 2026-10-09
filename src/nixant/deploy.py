@@ -1,6 +1,8 @@
 """up and rebuild: evaluate, build, converge the instance, then activate."""
 
+import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -52,7 +54,7 @@ def up(
         _refresh_runtime(provider, spec, state)
     else:
         activate(provider, runner, spec, system, timeout=timeout)
-    _report(provider, spec, target)
+    _report(provider, spec, target, _recorded_routes(current))
 
 
 def rebuild(
@@ -75,7 +77,7 @@ def rebuild(
         )
     wait_ready(provider, spec.instance_name, spec.kind, verbose=runner.verbose)
     activate(provider, runner, spec, system, timeout=timeout)
-    _report(provider, spec, target)
+    _report(provider, spec, target, _recorded_routes(state))
 
 
 def _desired(root: Path, target: str, runner: Runner) -> Desired:
@@ -193,9 +195,30 @@ def _refresh_runtime(
         provider.unset_metadata(spec.instance_name, [PREFIX + "routes"])
 
 
-def _report(provider: IncusProvider, spec: MachineSpec, target: str) -> None:
+def _recorded_routes(state: MachineState | None) -> dict[str, int]:
+    try:
+        recorded = (
+            json.loads(state.config.get(PREFIX + "routes", "{}")) if state else {}
+        )
+    except ValueError:
+        return {}
+    return recorded if isinstance(recorded, dict) else {}
+
+
+def _report(
+    provider: IncusProvider,
+    spec: MachineSpec,
+    target: str,
+    before: Mapping[str, int],
+) -> None:
     final = provider.inspect(spec.instance_name)
     addresses = " ".join(final.ipv4) if final else ""
     typer.echo(
         f"{spec.instance_name} ready ({target}) {addresses}; nixant shell {target}"
     )
+    routes = [(p.hostname, p.host) for p in spec.ports if p.hostname]
+    for hostname, port in routes:
+        mark = "" if before.get(hostname) == port else " (new)"
+        typer.echo(f"route {hostname} -> 127.0.0.1:{port}{mark}")
+    if routes:
+        typer.echo("served by `nixant proxy` on the host")

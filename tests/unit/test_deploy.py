@@ -496,6 +496,28 @@ def test_up_records_and_drops_routes(
     assert PREFIX + "routes" not in running_deploy["config"]
 
 
+def test_up_prints_new_and_existing_routes(
+    deploy: dict[str, Mock], running_deploy: dict
+) -> None:
+    original = deploy["evaluate"].return_value
+    ports = (
+        PortSpec(8105, 80, hostname="laive.localhost"),
+        PortSpec(9105, 8025, hostname="mail.laive.localhost"),
+    )
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, ports=ports[:1])
+    )
+    first = CliRunner().invoke(app, ["up"])
+    assert "route laive.localhost -> 127.0.0.1:8105 (new)" in first.output
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, ports=ports)
+    )
+    second = CliRunner().invoke(app, ["up"])
+    assert "route laive.localhost -> 127.0.0.1:8105\n" in second.output
+    assert "route mail.laive.localhost -> 127.0.0.1:9105 (new)" in second.output
+    assert "nixant proxy" in second.output
+
+
 def test_up_removes_obsolete_mount_without_touching_unrelated_devices(
     deploy: dict[str, Mock], running_deploy: dict
 ) -> None:
