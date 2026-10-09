@@ -95,7 +95,7 @@ $ nixant init            # create flake.nix from the default template
 $ nixant up              # build, create/start, transfer, activate (target "dev")
 $ nixant shell           # login shell in the guest, in the matching directory (alias: ssh)
 $ nixant exec -- make    # run one command
-$ nixant rebuild         # re-build and always re-activate a running instance
+$ nixant rebuild         # re-build and always re-activate a running instance (alias: reload)
 $ nixant status          # metadata and cached build state, no evaluation
 $ nixant config          # runtime JSON, project ID, instance name, mount sources
 $ nixant restart         # restart (or start) without re-activating

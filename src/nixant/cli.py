@@ -191,6 +191,12 @@ def rebuild(
     _deploy(ctx, target, timeout, deploy.rebuild)
 
 
+# For Vagrant habits; unlike vagrant reload it does not restart the machine.
+app.command("reload", help="Alias of rebuild (re-activates; no machine restart).")(
+    rebuild
+)
+
+
 def _enter(ctx: typer.Context, target: str | None, command: list[str] | None) -> None:
     provider = IncusProvider(ctx.obj["runner"])
     root = discover_project()
