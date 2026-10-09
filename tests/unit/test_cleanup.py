@@ -178,3 +178,31 @@ def test_destroy_without_a_terminal_requires_yes(cleanup: tuple) -> None:
     assert result.exit_code != 0
     assert "--yes" in result.output
     provider.destroy.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["down"],
+        ["restart"],
+        ["destroy", "--yes"],
+        ["snapshots"],
+        ["snapshot", "s1"],
+        ["restore", "s1"],
+    ],
+)
+def test_target_comes_from_the_current_directory(
+    cleanup: tuple, monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    lookup, _, _ = cleanup
+    monkeypatch.setattr("nixant.cli.target_at", lambda provider, root, path: "site")
+    monkeypatch.setattr("nixant.cli.wait_ready", Mock())
+    CliRunner().invoke(app, arguments)
+    assert lookup.call_args.args[2] == "site"
+    explicit = (
+        [*arguments, "-t", "other"]
+        if arguments[0].startswith(("snapshot", "restore"))
+        else [*arguments, "other"]
+    )
+    CliRunner().invoke(app, explicit)
+    assert lookup.call_args.args[2] == "other"

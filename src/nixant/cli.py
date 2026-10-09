@@ -130,15 +130,27 @@ def parse_duration(value: str | None) -> float | None:
     return seconds
 
 
+CWD_TARGET_HELP = "Default: the target mounting this directory, else dev."
+
+
+def _target(ctx: typer.Context, root: Path, target: str | None) -> str:
+    """An explicit target, else the one whose mount contains the current directory."""
+    if target is not None:
+        return target
+    provider = IncusProvider(ctx.obj["runner"])
+    return target_at(provider, root, Path.cwd()) or "dev"
+
+
 def _deploy(
     ctx: typer.Context,
-    target: str,
+    target: str | None,
     timeout: str | None,
     step: Callable[[IncusProvider, Runner, Path, str, float], None],
 ) -> None:
     duration = parse_duration(timeout) or DEFAULT_ACTIVATION_TIMEOUT
     runner = ctx.obj["runner"]
     root = discover_project()
+    target = _target(ctx, root, target)
     with target_lock(root, target):
         step(IncusProvider(runner), runner, root, target, duration)
 
@@ -160,7 +172,7 @@ def init(
 @app.command()
 def up(
     ctx: typer.Context,
-    target: str = typer.Argument("dev"),
+    target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
     timeout: str | None = typer.Option(
         None, help="Activation deadline, e.g. 5m (default 30m)."
     ),
@@ -172,7 +184,7 @@ def up(
 @app.command()
 def rebuild(
     ctx: typer.Context,
-    target: str = typer.Argument("dev"),
+    target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
     timeout: str | None = typer.Option(None, help="Activation deadline, e.g. 5m."),
 ) -> None:
     """Build and always activate an existing running environment."""
@@ -244,11 +256,12 @@ def exec_command(
 @app.command()
 def down(
     ctx: typer.Context,
-    target: str = typer.Argument("dev"),
+    target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
     """Stop an owned environment without evaluating its configuration."""
     root = discover_project()
+    target = _target(ctx, root, target)
     provider = IncusProvider(ctx.obj["runner"])
     with target_lock(root, target):
         state = require_instance(
@@ -277,11 +290,12 @@ def down(
 @app.command()
 def restart(
     ctx: typer.Context,
-    target: str = typer.Argument("dev"),
+    target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
     """Restart (or start) an owned environment without re-activating it."""
     root = discover_project()
+    target = _target(ctx, root, target)
     runner = ctx.obj["runner"]
     provider = IncusProvider(runner)
     with target_lock(root, target):
@@ -313,11 +327,12 @@ def _remove_gcroot(root: Path, target: str) -> None:
 @app.command()
 def destroy(
     ctx: typer.Context,
-    target: str = typer.Argument("dev"),
+    target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
 ) -> None:
     """Delete an owned environment and its disposable host GC root."""
     root = discover_project()
+    target = _target(ctx, root, target)
     provider = IncusProvider(ctx.obj["runner"])
     with target_lock(root, target):
         state = lookup(provider, root, target, require_schema=False)
@@ -463,9 +478,13 @@ def _orphans(provider: IncusProvider) -> None:
 
 
 @app.command("config")
-def show_config(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
+def show_config(
+    ctx: typer.Context,
+    target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
+) -> None:
     """Print runtime configuration and resolved checkout paths as JSON."""
     root = discover_project()
+    target = _target(ctx, root, target)
     spec = evaluate_spec(root, target, ctx.obj["runner"])
     override = get_override(root, target, ctx.obj["runner"])
     sources = resolve_mount_sources(
@@ -550,11 +569,12 @@ def adopt(
 def snapshot_command(
     ctx: typer.Context,
     name: str | None = typer.Argument(None, help="Snapshot name (default: timestamp)."),
-    target: str = typer.Option("dev", "--target", "-t"),
+    target: str | None = typer.Option(None, "--target", "-t", help=CWD_TARGET_HELP),
     delete: bool = typer.Option(False, "--delete", help="Delete NAME instead."),
 ) -> None:
     """Snapshot an owned environment, or delete a snapshot."""
     root = discover_project()
+    target = _target(ctx, root, target)
     provider = IncusProvider(ctx.obj["runner"])
     with target_lock(root, target):
         state = require_instance(
@@ -574,10 +594,12 @@ def snapshot_command(
 
 @app.command("snapshots")
 def snapshots_command(
-    ctx: typer.Context, target: str = typer.Option("dev", "--target", "-t")
+    ctx: typer.Context,
+    target: str | None = typer.Option(None, "--target", "-t", help=CWD_TARGET_HELP),
 ) -> None:
     """List the snapshots of an owned environment."""
     root = discover_project()
+    target = _target(ctx, root, target)
     provider = IncusProvider(ctx.obj["runner"])
     state = require_instance(
         lookup(provider, root, target, require_schema=False), provider, root, target
@@ -593,10 +615,11 @@ def snapshots_command(
 def restore(
     ctx: typer.Context,
     name: str = typer.Argument(..., help="Snapshot to roll back to."),
-    target: str = typer.Option("dev", "--target", "-t"),
+    target: str | None = typer.Option(None, "--target", "-t", help=CWD_TARGET_HELP),
 ) -> None:
     """Roll an owned environment back to a snapshot."""
     root = discover_project()
+    target = _target(ctx, root, target)
     runner = ctx.obj["runner"]
     provider = IncusProvider(runner)
     with target_lock(root, target):
