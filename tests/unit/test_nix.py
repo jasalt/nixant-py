@@ -195,7 +195,9 @@ def test_duplicate_runtime_host_ports(runtime: dict) -> None:
 
 
 def test_runtime_roundtrip_with_ports_and_readonly_mount(runtime: dict) -> None:
-    runtime["ports"] = [{"host": 65535, "guest": 1, "address": "127.0.0.1"}]
+    runtime["ports"] = [
+        {"host": 65535, "guest": 1, "address": "127.0.0.1", "hostname": None}
+    ]
     runtime["mounts"]["workspace"]["readOnly"] = True
     spec = MachineSpec.from_runtime(runtime)
     assert spec.ports[0].host == 65535
@@ -241,3 +243,22 @@ H = "a" * 32
 def test_store_path_shapes(value: object, store: bool, drv: bool) -> None:
     assert is_store_path(value) is store
     assert is_drv_path(value) is drv
+
+
+def test_runtime_port_hostname_roundtrip(runtime: dict) -> None:
+    runtime["ports"] = [
+        {"host": 8080, "guest": 80, "address": "127.0.0.1", "hostname": "a.localhost"},
+        {"host": 8081, "guest": 81, "address": "127.0.0.1", "hostname": None},
+    ]
+    spec = MachineSpec.from_runtime(runtime)
+    assert [p.hostname for p in spec.ports] == ["a.localhost", None]
+    assert spec.to_runtime()["ports"] == runtime["ports"]
+
+
+def test_duplicate_runtime_hostnames(runtime: dict) -> None:
+    runtime["ports"] = [
+        {"host": 8080 + n, "guest": 80 + n, "address": "127.0.0.1", "hostname": "a.b"}
+        for n in range(2)
+    ]
+    with pytest.raises(NixantError, match="hostnames must be unique"):
+        MachineSpec.from_runtime(runtime)

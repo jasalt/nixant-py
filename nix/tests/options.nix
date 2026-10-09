@@ -65,6 +65,10 @@ let
     relativeWorkdir = rejects { nixant.workdir = "relative"; };
     badPort = rejects { nixant.ports = [{ host = 65536; guest = 80; }]; };
     duplicatePorts = rejects { nixant.ports = [ { host = 80; guest = 80; } { host = 80; guest = 81; } ]; };
+    hostnameDefault = (builtins.head (evaluate { nixant.ports = [{ host = 8080; guest = 80; }]; }).ports).hostname == null;
+    hostnameKept = (builtins.head (evaluate { nixant.ports = [{ host = 8080; guest = 80; hostname = "a.localhost"; }]; }).ports).hostname == "a.localhost";
+    duplicateHostnames = rejects { nixant.ports = [ { host = 8080; guest = 80; hostname = "a.localhost"; } { host = 8081; guest = 81; hostname = "a.localhost"; } ]; };
+    badHostname = rejects { nixant.ports = [{ host = 8080; guest = 80; hostname = "A_b.localhost"; }]; };
     portDefault = (builtins.head (evaluate { nixant.ports = [{ host = 8080; guest = 80; }]; }).ports).address == "127.0.0.1";
     ephemeral = (evaluate { nixant.ephemeral = true; }).ephemeral && !base.ephemeral;
     agentWritableExtraMount = rejects { nixant.isolation = "agent"; nixant.mounts.data = { source = "/d"; target = "/data"; }; };

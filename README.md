@@ -80,7 +80,7 @@ Extension modules may read these options. The container and VM modules set `nixa
 |---|---|
 | `nixant.user.name`, `nixant.user.uid` | The guest user, whose UID equals the host UID. Services that must read and write the workspace run as this user. |
 | `nixant.mounts.<name>.{source,target,readOnly,enable}` | Host mounts; `nixant.mounts.workspace.target` (default `/workspace`) is the project root in the guest. |
-| `nixant.ports` | List of `{ host; guest; address; }` forwards; `address` defaults to `127.0.0.1`. |
+| `nixant.ports` | List of `{ host; guest; address; hostname; }` forwards; `address` defaults to `127.0.0.1`. An optional unique `hostname` (e.g. `mysite.localhost`) is recorded by `up` as `user.nixant.routes` for a host-side proxy. |
 | `nixant.isolation` | `"none"` or `"agent"` (see Agent isolation). |
 | `nixant.instanceName`, `nixant.workdir`, `nixant.cpus`, `nixant.memory`, `nixant.disk`, `nixant.ephemeral` | Instance settings. |
 

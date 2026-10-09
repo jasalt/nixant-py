@@ -98,6 +98,7 @@ class PortSpec:
     host: int
     guest: int
     address: str = "127.0.0.1"
+    hostname: str | None = None
 
 
 @dataclass(frozen=True)
@@ -137,7 +138,12 @@ class MachineSpec:
                 for mount in self.mounts
             },
             "ports": [
-                {"host": port.host, "guest": port.guest, "address": port.address}
+                {
+                    "host": port.host,
+                    "guest": port.guest,
+                    "address": port.address,
+                    "hostname": port.hostname,
+                }
                 for port in self.ports
             ],
             "workdir": self.workdir,
@@ -190,6 +196,7 @@ class MachineSpec:
                         host=_port(port["host"]),
                         guest=_port(port["guest"]),
                         address=_string(port["address"]),
+                        hostname=_optional_string(port.get("hostname")),
                     )
                     for port in data["ports"]
                 ),
@@ -204,9 +211,16 @@ class MachineSpec:
                 raise ValueError("mount targets must be unique")
             if len({p.host for p in spec.ports}) != len(spec.ports):
                 raise ValueError("host ports must be unique")
+            hostnames = [p.hostname for p in spec.ports if p.hostname]
+            if len(set(hostnames)) != len(hostnames):
+                raise ValueError("port hostnames must be unique")
             return spec
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise NixantError(f"invalid nixant runtime: {exc}") from exc
+
+
+def _optional_string(value: Any) -> str | None:
+    return None if value is None else _string(value)
 
 
 def _string(value: Any) -> str:

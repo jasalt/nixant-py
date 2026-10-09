@@ -460,6 +460,41 @@ def test_up_refreshes_workdir_without_switching(
     deploy["activate"].assert_not_called()
 
 
+def test_up_records_and_drops_routes(
+    deploy: dict[str, Mock], running_deploy: dict
+) -> None:
+    original = deploy["evaluate"].return_value
+    assert PREFIX + "routes" not in running_deploy["config"]
+    ports = (
+        PortSpec(8105, 80, hostname="laive.localhost"),
+        PortSpec(9105, 8025, hostname="mail.laive.localhost"),
+        PortSpec(9999, 99),
+    )
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, ports=ports)
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    routes = json.loads(running_deploy["config"][PREFIX + "routes"])
+    assert routes == {"laive.localhost": 8105, "mail.laive.localhost": 9105}
+
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, ports=ports[:1])
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(running_deploy["config"][PREFIX + "routes"]) == {
+        "laive.localhost": 8105
+    }
+
+    deploy["evaluate"].return_value = replace(
+        original, spec=replace(original.spec, ports=(PortSpec(9999, 99),))
+    )
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    assert PREFIX + "routes" not in running_deploy["config"]
+
+
 def test_up_removes_obsolete_mount_without_touching_unrelated_devices(
     deploy: dict[str, Mock], running_deploy: dict
 ) -> None:

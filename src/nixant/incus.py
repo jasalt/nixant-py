@@ -170,6 +170,12 @@ class IncusProvider:
                 ]
             )
 
+    def unset_metadata(self, name: str, keys: Sequence[str]) -> None:
+        if any(not key.startswith("user.nixant.") for key in keys):
+            raise NixantError("refusing to unset non-nixant metadata")
+        for key in keys:
+            self.runner.run(["incus", "config", "unset", _local(name), key])
+
     def apply(self, name: str, change: Change) -> None:
         """Run one planned change; the planner has already decided it is live."""
         target = _local(name)

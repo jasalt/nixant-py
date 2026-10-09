@@ -39,8 +39,19 @@ let
       host = mkOption { type = types.port; };
       guest = mkOption { type = types.port; };
       address = mkOption { type = types.str; default = "127.0.0.1"; };
+      hostname = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "mysite.localhost";
+        description = ''
+          Name that routes to this forward through the host-side proxy, so the
+          URL needs no port. Recorded on the instance by `nixant up`.
+        '';
+      };
     };
   };
+  hostnames = builtins.filter (name: name != null) (map (port: port.hostname) cfg.ports);
+  hostnamePattern = "[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*";
   mounts = lib.filterAttrs (_: mount: mount.enable) cfg.mounts;
   targets = map (mount: mount.target) (builtins.attrValues mounts);
   hostPorts = map (port: port.host) cfg.ports;
@@ -63,6 +74,10 @@ let
       message = "nixant.workdir must be an absolute path."; }
     { assertion = builtins.length hostPorts == builtins.length (lib.unique hostPorts);
       message = "nixant.ports host ports must be unique."; }
+    { assertion = builtins.length hostnames == builtins.length (lib.unique hostnames);
+      message = "nixant.ports hostnames must be unique."; }
+    { assertion = lib.all (name: builtins.match hostnamePattern name != null) hostnames;
+      message = "nixant.ports hostnames must be lowercase DNS names such as mysite.localhost."; }
     { assertion = !agent || !cfg.user.sudo;
       message = "nixant.isolation = \"agent\" forbids nixant.user.sudo; remove the override."; }
     { assertion = !agent || extraWritableMounts == [];
@@ -130,7 +145,7 @@ in {
       memoryBytes = cfg.memory;
       diskBytes = cfg.disk;
       mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) mounts;
-      ports = map (port: { inherit (port) host guest address; }) cfg.ports;
+      ports = map (port: { inherit (port) host guest address hostname; }) cfg.ports;
       workdir = if cfg.workdir != null then cfg.workdir
         else if mounts ? workspace then mounts.workspace.target else user.home;
       user = {

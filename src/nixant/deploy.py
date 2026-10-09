@@ -1,5 +1,6 @@
 """up and rebuild: evaluate, build, converge the instance, then activate."""
 
+import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -183,9 +184,14 @@ def _refresh_runtime(
 ) -> None:
     """Settings that do not change the system closure still drive shell/exec."""
     runtime = {PREFIX + "user": spec.user.name, PREFIX + "workdir": spec.workdir}
+    routes = {p.hostname: p.host for p in spec.ports if p.hostname}
+    if routes:
+        runtime[PREFIX + "routes"] = json.dumps(routes, sort_keys=True)
     stale = {k: v for k, v in runtime.items() if state.config.get(k) != v}
     if stale:
         provider.set_metadata(spec.instance_name, stale)
+    if not routes and PREFIX + "routes" in state.config:
+        provider.unset_metadata(spec.instance_name, [PREFIX + "routes"])
 
 
 def _report(provider: IncusProvider, spec: MachineSpec, target: str) -> None:

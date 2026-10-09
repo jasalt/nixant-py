@@ -94,6 +94,8 @@ class FakeIncus:
             raise RuntimeError(f"no instance for {argv}")
         elif argv[:3] == ["incus", "config", "set"]:
             self.data["config"].update(item.split("=", 1) for item in argv[4:])
+        elif argv[:3] == ["incus", "config", "unset"]:
+            self.data["config"].pop(argv[4], None)
         elif argv[:4] == ["incus", "config", "device", "remove"]:
             del self.data["devices"][argv[5]]
         elif argv[:4] == ["incus", "config", "device", "add"]:
