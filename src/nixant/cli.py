@@ -48,6 +48,7 @@ from nixant.project import (
     resolve_mount_sources,
     target_lock,
 )
+from nixant.proxy import serve, setup_help
 from nixant.readiness import wait_ready
 from nixant.run import Runner, check_host_tools
 
@@ -320,6 +321,25 @@ def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
             provider.destroy(state.name)
             typer.echo(f"{state.name}: destroyed")
         _remove_gcroot(root, target)
+
+
+@app.command()
+def proxy(
+    ctx: typer.Context,
+    port: int = typer.Option(80, "--port", help="Loopback port to serve on."),
+    print_setup: bool = typer.Option(
+        False, "--print-setup", help="Show how to allow binding the port, then exit."
+    ),
+) -> None:
+    """Serve <name>.localhost for every running instance's hostname forwards.
+
+    Runs Caddy on 127.0.0.1 and [::1] only and keeps its routes in step with
+    Incus. It changes nothing on the host; --print-setup explains port 80.
+    """
+    if print_setup:
+        typer.echo(setup_help(port))
+        return
+    serve(IncusProvider(ctx.obj["runner"]), port=port)
 
 
 @app.command()

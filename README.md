@@ -135,6 +135,17 @@ nixant = {
 - The `workspace` mount (project root at `/workspace`) stays in place when you add other mounts; drop it with `nixant.mounts.workspace.enable = false`, or override single keys such as `nixant.mounts.workspace.target = "/code"` or `readOnly = true`.
 - Mounts and ports that disappear from the configuration are removed from the instance.
 
+## Port-less hostnames
+
+Give a forward a `hostname` (`nixant.ports = [{ host = 8105; guest = 80; hostname = "mysite.localhost"; }]`)
+and run `nixant proxy` on the host to reach it as `http://mysite.localhost`.
+The proxy needs `caddy` on `PATH`, serves only on `127.0.0.1` and `[::1]`, keeps
+its admin API on a Unix socket in `$XDG_RUNTIME_DIR`, and follows the running
+instances in Incus, so routes appear and vanish with `up` and `down`. Unknown
+hosts get a 404, and a hostname claimed by two instances is not routed.
+Port 80 needs a one-time host change that nixant never makes; `nixant proxy
+--print-setup` shows the options, or pass `--port` to use another port.
+
 ## Agent isolation
 
 `nixant.isolation = "agent"` restricts the guest for autonomous coding agents:
