@@ -4,13 +4,14 @@ import http.client
 import json
 import os
 import select
+import shlex
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from nixant.models import MachineState
 from nixant.ownership import PREFIX
 
 POLL_SECONDS = 30
+COMMAND_POLL_SECONDS = 5
 SETTLE_SECONDS = 0.3
 
 
@@ -47,6 +49,29 @@ def collect_routes(states: list[MachineState]) -> tuple[dict[str, int], list[str
         else:
             routes[hostname] = owners[0][1]
     return routes, warnings
+
+
+def local_routes(provider: IncusProvider) -> dict[str, int]:
+    routes, warnings = collect_routes(provider.find({PREFIX + "managed": "true"}))
+    for warning in warnings:
+        print(f"nixant proxy: {warning}", file=sys.stderr, flush=True)
+    return routes
+
+
+def command_routes(argv: list[str]) -> dict[str, int]:
+    """Routes printed by another host's `nixant proxy --routes`, e.g. in a VM."""
+    try:
+        result = subprocess.run(argv, capture_output=True, check=True, timeout=60)
+        data = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise NixantError(
+            f"could not read routes from {shlex.join(argv)}: {exc}"
+        ) from exc
+    if not isinstance(data, dict) or not all(
+        isinstance(name, str) and type(port) is int for name, port in data.items()
+    ):
+        raise NixantError("route export must be a JSON object of hostname to port")
+    return data
 
 
 def caddy_config(
@@ -139,7 +164,9 @@ Or run the proxy as a system service that may bind low ports only itself:
 """
 
 
-def serve(provider: IncusProvider, *, port: int = 80) -> None:
+def serve(
+    routes: Callable[[], dict[str, int]], *, port: int = 80, watch_incus: bool = True
+) -> None:
     caddy = shutil.which("caddy")
     if caddy is None:
         raise NixantError("caddy not found on PATH; install it or use nix shell")
@@ -147,10 +174,7 @@ def serve(provider: IncusProvider, *, port: int = 80) -> None:
     listen = [f"127.0.0.1:{port}", f"[::1]:{port}"]
 
     def current() -> dict[str, Any]:
-        routes, warnings = collect_routes(provider.find({PREFIX + "managed": "true"}))
-        for warning in warnings:
-            print(f"nixant proxy: {warning}", file=sys.stderr, flush=True)
-        return caddy_config(routes, admin, listen)
+        return caddy_config(routes(), admin, listen)
 
     admin.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="nixant-proxy-") as scratch:
@@ -158,30 +182,34 @@ def serve(provider: IncusProvider, *, port: int = 80) -> None:
         config = current()
         initial.write_text(json.dumps(config))
         caddy_proc = subprocess.Popen([caddy, "run", "--config", str(initial)])
-        monitor = subprocess.Popen(
-            ["incus", "monitor", "local:", "--type=lifecycle", "--format=json"],
-            stdout=subprocess.PIPE,
+        monitor = (
+            subprocess.Popen(
+                ["incus", "monitor", "local:", "--type=lifecycle", "--format=json"],
+                stdout=subprocess.PIPE,
+            )
+            if watch_incus
+            else None
         )
         try:
             _watch(caddy_proc, monitor, current, admin, config)
         finally:
             for child in (monitor, caddy_proc):
-                if child.poll() is None:
+                if child is not None and child.poll() is None:
                     child.terminate()
             for child in (monitor, caddy_proc):
-                child.wait()
+                if child is not None:
+                    child.wait()
             admin.unlink(missing_ok=True)
 
 
 def _watch(
     caddy: "subprocess.Popen[bytes]",
-    monitor: "subprocess.Popen[bytes]",
+    monitor: "subprocess.Popen[bytes] | None",
     current: Any,
     admin: Path,
     loaded: dict[str, Any],
 ) -> None:
-    assert monitor.stdout is not None
-    stream = monitor.stdout
+    stream = monitor.stdout if monitor is not None else None
     last_poll = time.monotonic()
     while True:
         if caddy.poll() is not None:
@@ -189,17 +217,24 @@ def _watch(
                 f"caddy exited with status {caddy.returncode}; "
                 "if it could not bind the port, see nixant proxy --print-setup"
             )
-        if monitor.poll() is not None:
+        if monitor is not None and monitor.poll() is not None:
             raise NixantError("incus monitor exited; is the Incus daemon running?")
-        ready, _, _ = select.select([stream], [], [], 1.0)
+        if stream is None:
+            time.sleep(1.0)
+            ready: list[Any] = []
+        else:
+            ready, _, _ = select.select([stream], [], [], 1.0)
         changed = False
         if ready:
+            assert stream is not None
             os.read(stream.fileno(), 65536)
             # Let a burst of events (create, config, start) settle into one reload.
             while select.select([stream], [], [], SETTLE_SECONDS)[0]:
                 os.read(stream.fileno(), 65536)
             changed = True
-        elif time.monotonic() - last_poll >= POLL_SECONDS:
+        elif time.monotonic() - last_poll >= (
+            POLL_SECONDS if stream is not None else COMMAND_POLL_SECONDS
+        ):
             changed = True
         if changed:
             last_poll = time.monotonic()

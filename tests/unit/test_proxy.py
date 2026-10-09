@@ -1,12 +1,15 @@
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
+import pytest
 from typer.testing import CliRunner
 
 from nixant.cli import app
+from nixant.errors import NixantError
 from nixant.models import MachineState
 from nixant.ownership import PREFIX
-from nixant.proxy import caddy_config, collect_routes
+from nixant.proxy import caddy_config, collect_routes, command_routes
 
 
 def _state(name: str, routes: object, status: str = "Running") -> MachineState:
@@ -67,3 +70,24 @@ def test_proxy_print_setup() -> None:
     assert result.exit_code == 0
     assert "ip_unprivileged_port_start=80" in result.output
     assert "CAP_NET_BIND_SERVICE" in result.output
+
+
+def test_command_routes_reads_another_hosts_export() -> None:
+    routes = command_routes(["echo", '{"a.localhost": 8001}'])
+    assert routes == {"a.localhost": 8001}
+
+
+def test_command_routes_rejects_bad_output() -> None:
+    with pytest.raises(NixantError, match="hostname to port"):
+        command_routes(["echo", '{"a.localhost": "x"}'])
+    with pytest.raises(NixantError, match="could not read routes"):
+        command_routes(["echo", "not json"])
+
+
+def test_proxy_routes_prints_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = Mock()
+    provider.find.return_value = [_state("a", {"a.localhost": 8001})]
+    monkeypatch.setattr("nixant.cli.IncusProvider", lambda runner: provider)
+    result = CliRunner().invoke(app, ["proxy", "--routes"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"a.localhost": 8001}

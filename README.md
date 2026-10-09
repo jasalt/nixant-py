@@ -146,6 +146,8 @@ hosts get a 404, and a hostname claimed by two instances is not routed.
 Port 80 needs a one-time host change that nixant never makes; `nixant proxy
 --print-setup` shows the options, or pass `--port` to use another port.
 
+Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy on the desktop with `nixant proxy --routes-from 'limactl shell default nixant proxy --routes'`; `--routes` prints the route table as JSON and the desktop polls it every few seconds. The desktop needs `caddy` and `nixant`, and Lima's forwards of the sites' ports to the desktop's loopback.
+
 ## Agent isolation
 
 `nixant.isolation = "agent"` restricts the guest for autonomous coding agents:

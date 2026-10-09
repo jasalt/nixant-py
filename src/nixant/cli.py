@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -48,7 +49,7 @@ from nixant.project import (
     resolve_mount_sources,
     target_lock,
 )
-from nixant.proxy import serve, setup_help
+from nixant.proxy import command_routes, local_routes, serve, setup_help
 from nixant.readiness import wait_ready
 from nixant.run import Runner, check_host_tools
 
@@ -330,6 +331,16 @@ def proxy(
     print_setup: bool = typer.Option(
         False, "--print-setup", help="Show how to allow binding the port, then exit."
     ),
+    routes: bool = typer.Option(
+        False, "--routes", help="Print the route table as JSON, then exit."
+    ),
+    routes_from: str | None = typer.Option(
+        None,
+        "--routes-from",
+        metavar="COMMAND",
+        help="Take routes from COMMAND's output (another host's `proxy --routes`, "
+        "e.g. `limactl shell default nixant proxy --routes`), polling it.",
+    ),
 ) -> None:
     """Serve <name>.localhost for every running instance's hostname forwards.
 
@@ -339,7 +350,15 @@ def proxy(
     if print_setup:
         typer.echo(setup_help(port))
         return
-    serve(IncusProvider(ctx.obj["runner"]), port=port)
+    provider = IncusProvider(ctx.obj["runner"])
+    if routes:
+        typer.echo(json.dumps(local_routes(provider), indent=2, sort_keys=True))
+        return
+    if routes_from is not None:
+        argv = shlex.split(routes_from)
+        serve(lambda: command_routes(argv), port=port, watch_incus=False)
+        return
+    serve(lambda: local_routes(provider), port=port)
 
 
 @app.command()
