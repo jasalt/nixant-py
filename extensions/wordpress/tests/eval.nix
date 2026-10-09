@@ -45,6 +45,8 @@ let
       extra.wordpress.enable = lib.mkForce false;
     }).config.system.build.toplevel.drvPath;
     urlDerivedFromPort = base.url == "http://localhost:8081";
+    urlDerivedFromHostname = (evaluate { extra.nixant.ports = lib.mkForce [ { host = 8081; guest = 80; hostname = "site.localhost"; } ]; }).config.wordpress.url == "http://site.localhost";
+    hostnameUrlResolvesInGuest = (evaluate { extra.nixant.ports = lib.mkForce [ { host = 8081; guest = 80; hostname = "site.localhost"; } ]; }).config.networking.hosts."127.0.0.1" == [ "site.localhost" ];
     urlExplicitWins = (evaluate { extra.wordpress.url = "http://localhost:9000"; }).config.wordpress.url == "http://localhost:9000";
     servicesExist = let c = base_.config; in
       c.services.mysql.enable && c.services.caddy.enable

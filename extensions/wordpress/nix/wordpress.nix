@@ -16,7 +16,11 @@ let
   # The first forwarded port that reaches guest port 80 is the site's URL.
   derivedUrl =
     let web = builtins.filter (port: port.guest == 80) nixantPorts;
-    in if web == [] then null else "http://localhost:${toString (builtins.head web).host}";
+        port = builtins.head web;
+    in if web == [] then null
+      # A hostname means the host-side proxy serves the site on port 80.
+      else if port.hostname != null then "http://${port.hostname}"
+      else "http://localhost:${toString port.host}";
 
   # wordpress.url as { host; port; }, or null when it is not http://host[:port].
   urlParts =
@@ -96,7 +100,7 @@ in {
     url = mkOption {
       type = types.nullOr types.str;
       default = derivedUrl;
-      defaultText = lib.literalExpression ''"http://localhost:<host port forwarded to guest 80>"'';
+      defaultText = lib.literalExpression ''"http://localhost:<host port forwarded to guest 80>", or "http://<hostname>" when that forward has a hostname'';
       example = "http://localhost:8081";
       description = ''
         Site URL, `http://<host>[:<port>]` without a path, kept in the home

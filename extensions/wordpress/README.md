@@ -80,6 +80,8 @@ Ignored files are also invisible to the Nix flake, so the site is never copied i
 }
 ```
 
+For a URL without a port, add `hostname = "client-a.localhost";` to the guest-80 forward and run `nixant proxy` on the host; `wordpress.url` becomes `http://client-a.localhost`. The guest resolves that name to itself, so WP-Cron and Site Health keep working. Switching an existing site between URLs updates `home` and `siteurl`; run `wp search-replace` for URLs stored in content.
+
 Every client needs its own `instanceName` and its own host ports.
 
 ### Options
@@ -92,7 +94,7 @@ Every client needs its own `instanceName` and its own host ports.
 | `wordpress.phpPackage` | `pkgs.php` (8.4 at the pinned nixpkgs) | PHP for PHP-FPM and WP-CLI. Override it for another version; it needs mysqli, gd, zip, exif and intl, which nixpkgs' PHP has. |
 | `wordpress.title` | `"WordPress"` | Site title, used at the first install only. |
 | `wordpress.listenAddress` | `"127.0.0.1"` | Guest address the site is served on. nixant's port forward connects to the guest's loopback, so the default keeps the site off the Incus bridge, where other instances could reach it. `null` listens on every interface. |
-| `wordpress.url` | `http://localhost:<host port forwarded to guest 80>` | The URL, `http://<host>[:<port>]` without a path, kept in the `home` and `siteurl` options. Must be set explicitly when no `nixant.ports` entry has `guest = 80`. `http://` only. The port must not be one the guest uses itself (Mailpit's, 3306). |
+| `wordpress.url` | `http://localhost:<host port forwarded to guest 80>`, or `http://<hostname>` if that forward sets `hostname` | The URL, `http://<host>[:<port>]` without a path, kept in the `home` and `siteurl` options. Must be set explicitly when no `nixant.ports` entry has `guest = 80`. `http://` only. The port must not be one the guest uses itself (Mailpit's, 3306). |
 | `wordpress.admin.{user,password,email}` | `admin` / `password` / `admin@example.test` | Administrator for the first install. Development-only credentials; they are stored in the Nix store. |
 | `wordpress.mailFrom` | `wordpress@example.test` | Sender for mail whose own sender is not a valid address. WordPress's default `wordpress@localhost` is rejected as invalid, so mail would never reach Mailpit. |
 | `wordpress.mailpit.{uiPort,smtpPort}` | `8025` / `1025` | Guest ports of Mailpit. Forward `uiPort` with `nixant.ports` to read the inbox on the host. |
@@ -193,7 +195,7 @@ plan.md                    design and decisions
 
 - One site per instance; for several clients use several projects. No multisite.
 - Containers only in practice: VMs serve the shared web root slowly and get no forwarded ports.
-- Plain HTTP on a forwarded localhost port; no TLS, no `.test` hostnames, no Xdebug, no phpMyAdmin.
+- Plain HTTP on a forwarded localhost port; no TLS, no Xdebug, no phpMyAdmin.
 - No production pull or push tooling yet; files can be synced on the host, the database with `wp db import`.
 - Nothing about the site's contents is declarative: plugins, themes, their activation and the core version live in `public/` and the database.
 - Only MariaDB, PHP-FPM, Caddy and Mailpit as shipped; the PHP version is one per instance.
