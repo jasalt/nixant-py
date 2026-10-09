@@ -93,7 +93,7 @@ Extension modules may read these options. The container and VM modules set `nixa
 ```console
 $ nixant init            # create flake.nix from the default template
 $ nixant up              # build, create/start, transfer, activate (target "dev")
-$ nixant shell           # login shell in the guest, in the workdir
+$ nixant shell           # login shell in the guest, in the matching directory
 $ nixant exec -- make    # run one command
 $ nixant rebuild         # re-build and always re-activate a running instance
 $ nixant status          # metadata and cached build state, no evaluation
@@ -106,7 +106,7 @@ $ nixant name [NAME]     # give this checkout its own instance name (git config)
 $ nixant adopt           # attach an instance whose checkout moved
 ```
 
-Every command takes an optional target name (default `dev`). `shell` and `exec` (`-n TARGET`) without one use the target whose mount source contains the current directory, the deepest one if mounts nest, so `nixant shell` inside `www/site` enters the instance that mounts `www/site`; they fall back to `dev` outside every mount or when several targets mount the same directory. This reads the instances' Incus mount devices and does not evaluate Nix. `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation (default 30 minutes).
+Every command takes an optional target name (default `dev`). `shell` and `exec` (`-n TARGET`) without one use the target whose mount source contains the current directory, the deepest one if mounts nest, so `nixant shell` inside `www/site` enters the instance that mounts `www/site`; they fall back to `dev` outside every mount or when several targets mount the same directory. Both start where the current directory appears in the guest, `/workspace/public_html` from `www/site/public_html`, and in the target's workdir when the current directory is outside its mounts. This reads the instances' Incus mount devices and does not evaluate Nix. `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation (default 30 minutes).
 
 - `up` and `rebuild` are the only commands that evaluate Nix. `shell`, `exec`, `down`, `destroy` and `status` find the instance by its `user.nixant.*` Incus metadata, so a broken or removed configuration never blocks cleanup.
 - `up` skips activation when the instance already runs the built system. `rebuild` never skips, so it is the explicit retry after a failed or degraded activation.

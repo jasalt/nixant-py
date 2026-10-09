@@ -37,6 +37,7 @@ from nixant.nix.eval import evaluate_spec
 from nixant.ownership import (
     PREFIX,
     check_owner,
+    guest_dir,
     lookup,
     require_instance,
     target_at,
@@ -195,7 +196,9 @@ def _enter(ctx: typer.Context, target: str | None, command: list[str] | None) ->
             "-c",
             'exec -l "$(getent passwd "$(id -un)" | cut -d: -f7)"',
         ]
-    argv = provider.exec_argv(state.name, command, user=user, cwd=workdir)
+    # Inside a mount, start where the current directory appears in the guest.
+    cwd = guest_dir(state, Path.cwd()) or workdir
+    argv = provider.exec_argv(state.name, command, user=user, cwd=cwd)
     try:
         os.execvp(argv[0], argv)
     except OSError as exc:

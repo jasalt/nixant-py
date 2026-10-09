@@ -10,6 +10,7 @@ from nixant.models import MachineState
 from nixant.ownership import (
     PREFIX,
     check_owner,
+    guest_dir,
     lookup,
     metadata,
     require_instance,
@@ -76,7 +77,11 @@ def test_require_instance_names_existing_targets(
 
 def _site(root: Path, target: str, source: Path) -> MachineState:
     devices = {
-        "nixant-mount-workspace": {"type": "disk", "source": str(source)},
+        "nixant-mount-workspace": {
+            "type": "disk",
+            "source": str(source),
+            "path": "/workspace",
+        },
         "nixant-port-8080": {"type": "proxy"},
         "root": {"type": "disk", "path": "/"},
     }
@@ -114,6 +119,28 @@ def test_target_at_without_a_single_match(tmp_path: Path) -> None:
         _site(tmp_path, "b", tmp_path),
     ]
     assert target_at(provider, tmp_path, tmp_path) is None
+
+
+def test_guest_dir_maps_through_the_deepest_mount(tmp_path: Path) -> None:
+    (tmp_path / "site/public_html/wp-content").mkdir(parents=True)
+    (tmp_path / "shared").mkdir()
+    state = _site(tmp_path, "a", tmp_path / "site")
+    state = replace(
+        state,
+        devices={
+            **state.devices,
+            "nixant-mount-content": {
+                "source": str(tmp_path / "site/public_html/wp-content"),
+                "path": "/srv/content",
+            },
+        },
+    )
+    assert guest_dir(state, tmp_path / "site") == "/workspace"
+    assert guest_dir(state, tmp_path / "site/public_html") == "/workspace/public_html"
+    assert guest_dir(state, tmp_path / "site/public_html/wp-content") == "/srv/content"
+    assert guest_dir(state, tmp_path / "shared") is None
+    (tmp_path / "link").symlink_to(tmp_path / "site/public_html")
+    assert guest_dir(state, tmp_path / "link") == "/workspace/public_html"
 
 
 @pytest.mark.parametrize("schema", ["0", "2", ""])

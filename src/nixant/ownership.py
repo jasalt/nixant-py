@@ -1,6 +1,6 @@
 """Ownership is the managed/project/target triple, never just a name."""
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from nixant.errors import NixantError
 from nixant.incus import IncusProvider
@@ -104,6 +104,22 @@ def resolve(
     return state
 
 
+def _mount_at(state: MachineState, path: Path) -> tuple[int, str] | None:
+    """The depth and guest path of state's deepest mount containing path."""
+    best: tuple[int, str] | None = None
+    for device, config in state.devices.items():
+        source, target = config.get("source"), config.get("path")
+        if not device.startswith(MOUNT_PREFIX) or not source or not target:
+            continue
+        if not path.is_relative_to(source):
+            continue
+        depth = len(Path(source).parts)
+        if best is None or depth > best[0]:
+            guest = PurePosixPath(target) / path.relative_to(source).as_posix()
+            best = depth, str(guest)
+    return best
+
+
 def target_at(provider: IncusProvider, root: Path, path: Path) -> str | None:
     """The target whose deepest mount source contains path, from Incus alone."""
     found = provider.find(
@@ -113,19 +129,20 @@ def target_at(provider: IncusProvider, root: Path, path: Path) -> str | None:
     depth = -1
     targets: set[str] = set()
     for state in found:
-        for device, config in state.devices.items():
-            source = config.get("source")
-            if not device.startswith(MOUNT_PREFIX) or not source:
-                continue
-            if not path.is_relative_to(source):
-                continue
-            parts = len(Path(source).parts)
-            if parts > depth:
-                depth, targets = parts, set()
-            if parts == depth:
-                targets.add(state.config.get(PREFIX + "target", ""))
+        match = _mount_at(state, path)
+        if match is None or match[0] < depth:
+            continue
+        if match[0] > depth:
+            depth, targets = match[0], set()
+        targets.add(state.config.get(PREFIX + "target", ""))
     # Several targets sharing the deepest mount leave the choice to the caller.
     return targets.pop() if len(targets) == 1 else None
+
+
+def guest_dir(state: MachineState, path: Path) -> str | None:
+    """Where path appears in the guest, if one of state's mounts contains it."""
+    match = _mount_at(state, path.resolve())
+    return match[1] if match else None
 
 
 def require_instance(

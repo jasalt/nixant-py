@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -104,6 +105,26 @@ def test_target_from_cwd(
         assert target_at.call_args.args[2] == Path.cwd()
     else:
         target_at.assert_not_called()
+
+
+def test_enter_starts_in_the_matching_guest_directory(
+    enter: tuple[Mock, Mock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lookup, execute = enter
+    site = tmp_path / "www/site"
+    (site / "public_html").mkdir(parents=True)
+    lookup.return_value = replace(
+        lookup.return_value,
+        devices={"nixant-mount-workspace": {"source": str(site), "path": "/workspace"}},
+    )
+    monkeypatch.chdir(site / "public_html")
+    assert CliRunner().invoke(app, ["shell"]).exit_code == 0
+    args = execute.call_args.args[1]
+    assert args[args.index("--cwd") + 1] == "/workspace/public_html"
+    monkeypatch.chdir(tmp_path)
+    assert CliRunner().invoke(app, ["exec", "true"]).exit_code == 0
+    args = execute.call_args.args[1]
+    assert args[args.index("--cwd") + 1] == "/workspace"
 
 
 @pytest.mark.parametrize(
