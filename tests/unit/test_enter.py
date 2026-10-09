@@ -78,6 +78,35 @@ def test_shell(enter: tuple[Mock, Mock]) -> None:
 
 
 @pytest.mark.parametrize(
+    ("arguments", "inferred", "target"),
+    [
+        (["shell"], "site", "site"),
+        (["shell"], None, "dev"),
+        (["shell", "other"], "site", "other"),
+        (["exec", "true"], "site", "site"),
+        (["exec", "-n", "other", "true"], "site", "other"),
+    ],
+)
+def test_target_from_cwd(
+    enter: tuple[Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+    inferred: str | None,
+    target: str,
+) -> None:
+    lookup, _ = enter
+    target_at = Mock(return_value=inferred)
+    monkeypatch.setattr("nixant.cli.target_at", target_at)
+    result = CliRunner().invoke(app, arguments)
+    assert result.exit_code == 0, result.output
+    assert lookup.call_args.args[2] == target
+    if target != "other":
+        assert target_at.call_args.args[2] == Path.cwd()
+    else:
+        target_at.assert_not_called()
+
+
+@pytest.mark.parametrize(
     ("state", "message"),
     [
         (None, "does not exist"),

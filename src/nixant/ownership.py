@@ -5,6 +5,7 @@ from pathlib import Path
 from nixant.errors import NixantError
 from nixant.incus import IncusProvider
 from nixant.models import SCHEMA_VERSION, MachineState
+from nixant.planner import MOUNT_PREFIX
 from nixant.project import project_id, validate_target
 
 PREFIX = "user.nixant."
@@ -101,6 +102,30 @@ def resolve(
             "destroy and up to change kind"
         )
     return state
+
+
+def target_at(provider: IncusProvider, root: Path, path: Path) -> str | None:
+    """The target whose deepest mount source contains path, from Incus alone."""
+    found = provider.find(
+        {PREFIX + "managed": "true", PREFIX + "project": project_id(root)}
+    )
+    path = path.resolve()
+    depth = -1
+    targets: set[str] = set()
+    for state in found:
+        for device, config in state.devices.items():
+            source = config.get("source")
+            if not device.startswith(MOUNT_PREFIX) or not source:
+                continue
+            if not path.is_relative_to(source):
+                continue
+            parts = len(Path(source).parts)
+            if parts > depth:
+                depth, targets = parts, set()
+            if parts == depth:
+                targets.add(state.config.get(PREFIX + "target", ""))
+    # Several targets sharing the deepest mount leave the choice to the caller.
+    return targets.pop() if len(targets) == 1 else None
 
 
 def require_instance(

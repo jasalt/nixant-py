@@ -39,6 +39,7 @@ from nixant.ownership import (
     check_owner,
     lookup,
     require_instance,
+    target_at,
 )
 from nixant.project import (
     discover_project,
@@ -174,9 +175,11 @@ def rebuild(
     _deploy(ctx, target, timeout, deploy.rebuild)
 
 
-def _enter(ctx: typer.Context, target: str, command: list[str] | None) -> None:
+def _enter(ctx: typer.Context, target: str | None, command: list[str] | None) -> None:
     provider = IncusProvider(ctx.obj["runner"])
     root = discover_project()
+    if target is None:
+        target = target_at(provider, root, Path.cwd()) or "dev"
     state = require_instance(lookup(provider, root, target), provider, root, target)
     if state.status != "Running":
         raise NixantError(f"instance {state.name} is not running; run nixant up")
@@ -200,7 +203,12 @@ def _enter(ctx: typer.Context, target: str, command: list[str] | None) -> None:
 
 
 @app.command()
-def shell(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
+def shell(
+    ctx: typer.Context,
+    target: str | None = typer.Argument(
+        None, help="Default: the target mounting this directory, else dev."
+    ),
+) -> None:
     """Enter the guest user's login shell without evaluating Nix."""
     _enter(ctx, target, None)
 
@@ -212,7 +220,12 @@ def shell(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
 def exec_command(
     ctx: typer.Context,
     command: Annotated[list[str], typer.Argument()],
-    target: str = typer.Option("dev", "--target", "-n"),
+    target: str | None = typer.Option(
+        None,
+        "--target",
+        "-n",
+        help="Default: the target mounting this directory, else dev.",
+    ),
 ) -> None:
     """Run a guest command, preserving its arguments and exit status."""
     _enter(ctx, target, command)

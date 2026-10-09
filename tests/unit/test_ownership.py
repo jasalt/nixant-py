@@ -14,6 +14,7 @@ from nixant.ownership import (
     metadata,
     require_instance,
     resolve,
+    target_at,
 )
 
 
@@ -71,6 +72,48 @@ def test_require_instance_names_existing_targets(
         PREFIX + "managed": "true",
         PREFIX + "project": metadata(tmp_path, "dev")[PREFIX + "project"],
     }
+
+
+def _site(root: Path, target: str, source: Path) -> MachineState:
+    devices = {
+        "nixant-mount-workspace": {"type": "disk", "source": str(source)},
+        "nixant-port-8080": {"type": "proxy"},
+        "root": {"type": "disk", "path": "/"},
+    }
+    return MachineState(
+        f"wp-{target}", "Running", "container", {**metadata(root, target)}, devices
+    )
+
+
+def test_target_at_picks_deepest_mount(tmp_path: Path) -> None:
+    provider = Mock(spec=IncusProvider)
+    (tmp_path / "www/a/public_html").mkdir(parents=True)
+    (tmp_path / "www/ab").mkdir(parents=True)
+    provider.find.return_value = [
+        _site(tmp_path, "dev", tmp_path),
+        _site(tmp_path, "a", tmp_path / "www/a"),
+        _site(tmp_path, "ab", tmp_path / "www/ab"),
+    ]
+    assert target_at(provider, tmp_path, tmp_path / "www/a/public_html") == "a"
+    assert target_at(provider, tmp_path, tmp_path / "www/a") == "a"
+    assert target_at(provider, tmp_path, tmp_path / "www/ab") == "ab"
+    assert target_at(provider, tmp_path, tmp_path / "www") == "dev"
+    assert provider.find.call_args.args[0] == {
+        PREFIX + "managed": "true",
+        PREFIX + "project": metadata(tmp_path, "dev")[PREFIX + "project"],
+    }
+
+
+def test_target_at_without_a_single_match(tmp_path: Path) -> None:
+    provider = Mock(spec=IncusProvider)
+    provider.find.return_value = [_site(tmp_path, "a", tmp_path / "www/a")]
+    assert target_at(provider, tmp_path, tmp_path) is None
+    # Two targets mounting the same directory are ambiguous.
+    provider.find.return_value = [
+        _site(tmp_path, "a", tmp_path),
+        _site(tmp_path, "b", tmp_path),
+    ]
+    assert target_at(provider, tmp_path, tmp_path) is None
 
 
 @pytest.mark.parametrize("schema", ["0", "2", ""])
