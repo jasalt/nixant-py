@@ -165,9 +165,29 @@ def test_enter_offers_to_start_a_stopped_instance(
     ready = Mock(return_value="running")
     monkeypatch.setattr("nixant.cli.wait_ready", ready)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    started = MachineState(
+        "owned-dev",
+        "Running",
+        "container",
+        {PREFIX + "routes": '{"site.localhost": 8105}'},
+        {
+            "nixant-port-8105": {
+                "type": "proxy",
+                "listen": "tcp:127.0.0.1:8105",
+                "connect": "tcp:127.0.0.1:80",
+            }
+        },
+        ipv4=("10.0.0.5",),
+    )
+    monkeypatch.setattr(IncusProvider, "inspect", lambda self, name: started)
     result = CliRunner().invoke(app, ["shell"], input="\n")
     assert result.exit_code == 0, result.output
     assert "Do you want to start the instance owned-dev now? [Y/n]" in result.output
+    assert "Starting the system container instance owned-dev\n" in result.output
+    assert "owned-dev ready (dev) 10.0.0.5; nixant shell dev\n" in result.output
+    assert "port 127.0.0.1:8105 -> guest 80\n" in result.output
+    assert "route site.localhost -> 127.0.0.1:8105\n" in result.output
+    assert "served by `nixant proxy` on the host" in result.output
     start.assert_called_once_with("owned-dev")
     assert ready.call_args.args[1:] == ("owned-dev", "container")
     execute.assert_called_once()

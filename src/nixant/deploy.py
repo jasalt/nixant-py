@@ -2,7 +2,7 @@
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -17,6 +17,7 @@ from nixant.nix.build import build
 from nixant.nix.eval import evaluate
 from nixant.ownership import PREFIX, metadata, resolve, routes_value
 from nixant.planner import (
+    PORT_PREFIX,
     Change,
     Effect,
     SetRootSize,
@@ -212,12 +213,39 @@ def _report(
     before: Mapping[str, int],
 ) -> None:
     final = provider.inspect(spec.instance_name)
-    addresses = " ".join(final.ipv4) if final else ""
-    typer.echo(
-        f"{spec.instance_name} ready ({target}) {addresses}; nixant shell {target}"
+    report(
+        spec.instance_name,
+        target,
+        final.ipv4 if final else (),
+        [(f"{p.address}:{p.host}", p.guest) for p in spec.ports],
+        {p.hostname: p.host for p in spec.ports if p.hostname},
+        before,
     )
-    routes = [(p.hostname, p.host) for p in spec.ports if p.hostname]
-    for hostname, port in routes:
+
+
+def report_state(state: MachineState, target: str) -> None:
+    """The ready report from what Incus records, without evaluating Nix."""
+    ports = []
+    for device, config in sorted(state.devices.items()):
+        listen, connect = config.get("listen", ""), config.get("connect", "")
+        if device.startswith(PORT_PREFIX) and listen and connect:
+            ports.append((listen.removeprefix("tcp:"), int(connect.rsplit(":", 1)[1])))
+    routes = _recorded_routes(state)
+    report(state.name, target, state.ipv4, ports, routes, routes)
+
+
+def report(
+    name: str,
+    target: str,
+    addresses: Iterable[str],
+    ports: Iterable[tuple[str, int]],
+    routes: Mapping[str, int],
+    before: Mapping[str, int],
+) -> None:
+    typer.echo(f"{name} ready ({target}) {' '.join(addresses)}; nixant shell {target}")
+    for listen, guest in ports:
+        typer.echo(f"port {listen} -> guest {guest}")
+    for hostname, port in routes.items():
         mark = "" if before.get(hostname) == port else " (new)"
         typer.echo(f"route {hostname} -> 127.0.0.1:{port}{mark}")
     if routes:

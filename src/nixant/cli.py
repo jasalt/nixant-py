@@ -243,9 +243,14 @@ def _offer_start(
         )
     runner = ctx.obj["runner"]
     with target_lock(root, target):
+        what = "system container" if kind == "container" else "VM"
+        typer.echo(f"Starting the {what} instance {name}")
         # Starting a frozen instance resumes it.
         provider.start(name)
         wait_ready(provider, name, kind, verbose=runner.verbose)
+        state = provider.inspect(name)
+    if state is not None:
+        deploy.report_state(state, target)
 
 
 @app.command()
