@@ -508,3 +508,14 @@ def test_inspect_reads_ephemeral_flag(provider: IncusProvider) -> None:
     )
     state = provider.inspect("dev")
     assert state is not None and state.ephemeral is True
+
+
+def test_unset_metadata_tolerates_a_missing_key() -> None:
+    runner = Mock()
+    runner.run.return_value = subprocess.CompletedProcess(
+        [], 1, b"", b"Error: Can't unset key 'x', it's not currently set"
+    )
+    IncusProvider(runner).unset_metadata("dev", ["user.nixant.routes"])
+    runner.run.return_value = subprocess.CompletedProcess([], 1, b"", b"boom")
+    with pytest.raises(CommandError):
+        IncusProvider(runner).unset_metadata("dev", ["user.nixant.routes"])

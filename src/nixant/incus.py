@@ -174,7 +174,11 @@ class IncusProvider:
         if any(not key.startswith("user.nixant.") for key in keys):
             raise NixantError("refusing to unset non-nixant metadata")
         for key in keys:
-            self.runner.run(["incus", "config", "unset", _local(name), key])
+            argv = ["incus", "config", "unset", _local(name), key]
+            result = self.runner.run(argv, capture_stderr=True, check=False)
+            # Unsetting a key that is already gone is the state we want.
+            if result.returncode and b"not currently set" not in (result.stderr or b""):
+                raise CommandError(argv, result.returncode, result.stderr)
 
     def apply(self, name: str, change: Change) -> None:
         """Run one planned change; the planner has already decided it is live."""
