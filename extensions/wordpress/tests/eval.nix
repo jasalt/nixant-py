@@ -47,6 +47,18 @@ let
     urlDerivedFromPort = base.url == "http://localhost:8081";
     urlDerivedFromHostname = (evaluate { extra.nixant.ports = lib.mkForce [ { host = 8081; guest = 80; hostname = "site.localhost"; } ]; }).config.wordpress.url == "http://site.localhost";
     hostnameUrlResolvesInGuest = (evaluate { extra.nixant.ports = lib.mkForce [ { host = 8081; guest = 80; hostname = "site.localhost"; } ]; }).config.networking.hosts."127.0.0.1" == [ "site.localhost" ];
+    httpsDerived = let c = (evaluate { extra.wordpress.https = true; extra.nixant.ports = lib.mkForce [ { host = 8081; guest = 80; hostname = "site.localhost"; } ]; }).config; in
+      c.wordpress.url == "https://site.localhost"
+      && c.networking.hosts."127.0.0.1" == [ "site.localhost" ]
+      && c.services.caddy.virtualHosts ? "https://site.localhost"
+      && lib.hasInfix "tls internal" c.services.caddy.virtualHosts."https://site.localhost".extraConfig
+      && lib.hasInfix "disable_redirects" c.services.caddy.globalConfig
+      && !(c.services.caddy.virtualHosts ? "https://invalid");
+    httpsExplicitUrlWithPort = let c = (evaluate { extra.wordpress.url = "https://site.localhost:8443"; }).config; in
+      c.services.caddy.virtualHosts ? "https://site.localhost:8443"
+      && c.services.caddy.virtualHosts.":80".serverAliases == [];
+    httpUrlHasNoTlsSite = let c = base_.config.services.caddy; in
+      builtins.attrNames c.virtualHosts == [ ":80" ] && !(lib.hasInfix "disable_redirects" c.globalConfig);
     urlExplicitWins = (evaluate { extra.wordpress.url = "http://localhost:9000"; }).config.wordpress.url == "http://localhost:9000";
     servicesExist = let c = base_.config; in
       c.services.mysql.enable && c.services.caddy.enable
@@ -149,7 +161,7 @@ let
     emptyRoot = fails "relative to the project root" { extra.wordpress.root = ""; };
     dotsInNamesAllowed = valid { extra.wordpress.root = "sites/v1..2/web"; };
     underivableUrl = fails "cannot be derived" { extra.nixant.ports = lib.mkForce []; };
-    nonHttpUrl = fails "must start with http://" { extra.wordpress.url = "https://localhost"; };
+    nonHttpUrl = fails "must start with http:// or https://" { extra.wordpress.url = "ftp://localhost"; };
     urlWithPath = fails "without a path" { extra.wordpress.url = "http://localhost:8081/site"; };
     urlTrailingSlash = fails "without a path" { extra.wordpress.url = "http://localhost:8081/"; };
     urlBadPort = fails "without a path" { extra.wordpress.url = "http://localhost:99999"; };

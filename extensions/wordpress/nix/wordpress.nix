@@ -14,21 +14,25 @@ let
     && !(builtins.elem ".." (lib.splitString "/" path));
 
   # The first forwarded port that reaches guest port 80 is the site's URL.
+  scheme = if cfg.https then "https" else "http";
   derivedUrl =
     let web = builtins.filter (port: port.guest == 80) nixantPorts;
         port = builtins.head web;
     in if web == [] then null
       # A hostname means the host-side proxy serves the site on port 80.
-      else if port.hostname != null then "http://${port.hostname}"
-      else "http://localhost:${toString port.host}";
+      else if port.hostname != null then "${scheme}://${port.hostname}"
+      else "${scheme}://localhost:${toString port.host}";
 
-  # wordpress.url as { host; port; }, or null when it is not http://host[:port].
+  # wordpress.url as { https; host; port; }, or null when it is not
+  # http[s]://host[:port].
   urlParts =
     let match = if cfg.url == null then null
-      else builtins.match "http://([A-Za-z0-9.-]+)(:([1-9][0-9]*))?" cfg.url;
-    in if match == null then null else {
-      host = builtins.elemAt match 0;
-      port = let port = builtins.elemAt match 2; in if port == null then 80 else lib.toInt port;
+      else builtins.match "(https?)://([A-Za-z0-9.-]+)(:([1-9][0-9]*))?" cfg.url;
+    in if match == null then null else rec {
+      https = builtins.elemAt match 0 == "https";
+      host = builtins.elemAt match 1;
+      port = let port = builtins.elemAt match 3; in
+        if port != null then lib.toInt port else if https then 443 else 80;
     };
   # Guest ports the site's URL port must not take over (see the loopback note
   # on the Caddy site below).
@@ -97,13 +101,25 @@ in {
       description = "Site title, used at the first install only.";
     };
 
+    https = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Derive https:// instead of http:// for `wordpress.url`. TLS ends in
+        front of the guest, at `nixant proxy --https` on the host; the guest
+        also serves the URL itself on loopback with its own internal CA, so
+        WordPress requesting its own URL (WP-Cron, Site Health) works. It does
+        not apply to an explicitly set `wordpress.url`, whose scheme wins.
+      '';
+    };
+
     url = mkOption {
       type = types.nullOr types.str;
       default = derivedUrl;
       defaultText = lib.literalExpression ''"http://localhost:<host port forwarded to guest 80>", or "http://<hostname>" when that forward has a hostname'';
       example = "http://localhost:8081";
       description = ''
-        Site URL, `http://<host>[:<port>]` without a path, kept in the home
+        Site URL, `http[s]://<host>[:<port>]` without a path, kept in the home
         and siteurl options. Derived from the `nixant.ports` entry whose guest
         port is 80; set it explicitly when there is none. The guest serves the
         site on this URL's port too and resolves its host to loopback, so
@@ -150,13 +166,14 @@ in {
           message = "wordpress.url is not set and cannot be derived: forward a host port to guest port 80 with nixant.ports, or set wordpress.url = \"http://localhost:8081\".";
         }
         {
-          assertion = cfg.url == null || lib.hasPrefix "http://" cfg.url;
-          message = "wordpress.url must start with http:// (TLS is not supported); got '${toString cfg.url}'.";
+          assertion = cfg.url == null || lib.hasPrefix "http://" cfg.url || lib.hasPrefix "https://" cfg.url;
+          message = "wordpress.url must start with http:// or https://; got '${toString cfg.url}'.";
         }
         {
-          assertion = cfg.url == null || !(lib.hasPrefix "http://" cfg.url)
+          assertion = cfg.url == null
+            || !(lib.hasPrefix "http://" cfg.url || lib.hasPrefix "https://" cfg.url)
             || (urlParts != null && urlParts.port <= 65535);
-          message = "wordpress.url must be http://<host>[:<port>], without a path or trailing slash (the site is served from /); got '${toString cfg.url}'.";
+          message = "wordpress.url must be http[s]://<host>[:<port>], without a path or trailing slash (the site is served from /); got '${toString cfg.url}'.";
         }
         {
           assertion = urlParts == null || !(builtins.elem urlParts.port reservedPorts);
@@ -180,7 +197,12 @@ in {
         # into hooks.
         mailPrepend = pkgs.writeText "nixant-wordpress-prepend.php" ''
           <?php
-          // nixant wordpress: replace an invalid WordPress mail sender, such as
+          // nixant wordpress: TLS ends at the host proxy, which says so with
+          // this header.
+          if ( ( $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? "" ) === 'https' ) {
+            $_SERVER['HTTPS'] = 'on';
+          }
+          // Replace an invalid WordPress mail sender, such as
           // wordpress@localhost, so mail reaches Mailpit.
           $GLOBALS['wp_filter']['wp_mail_from'][10][] = array(
             'function' => static function ( $from ) {
@@ -200,6 +222,20 @@ in {
             auto_prepend_file = ${mailPrepend}
           '';
         };
+        httpsSelf = urlParts != null && urlParts.https;
+        httpsSelfAddress =
+          if urlParts == null then "https://invalid"
+          else "https://${urlParts.host}${lib.optionalString (urlParts.port != 443) ":${toString urlParts.port}"}";
+        siteBody = ''
+          root * ${root}
+          # The web root is a project directory: hide dotfiles anywhere in it
+          # (.git, .env, .user.ini) and the PHP error log.
+          @hidden path_regexp /\.|^/wp-content/debug\.log$
+          respond @hidden 404
+          encode gzip
+          php_fastcgi unix/${pool.socket}
+          file_server
+        '';
         wpSite = pkgs.callPackage ./wp-site.nix { wp-cli = wpCli; };
         uiPort = builtins.filter (port: port.guest == cfg.mailpit.uiPort) config.nixant.ports;
         # Everything wp-site setup needs; a change reruns the setup unit.
@@ -282,25 +318,24 @@ in {
           enable = true;
           inherit user group;
           enableReload = false;
-          globalConfig = "admin off";
           # nixant forwards the host port to guest port 80, but WordPress
           # requests its own URL (WP-Cron, Site Health, static exporters) from
           # inside the guest, at the URL's port. Serve that port as well; the
           # bind below keeps it on loopback too.
           virtualHosts.":80".serverAliases =
-            lib.optional (urlParts != null && urlParts.port != 80) ":${toString urlParts.port}";
+            lib.optional (urlParts != null && !urlParts.https && urlParts.port != 80)
+              ":${toString urlParts.port}";
           virtualHosts.":80".extraConfig = lib.optionalString (cfg.listenAddress != null) ''
             bind ${cfg.listenAddress}
-          '' + ''
-            root * ${root}
-            # The web root is a project directory: hide dotfiles anywhere in it
-            # (.git, .env, .user.ini) and the PHP error log.
-            @hidden path_regexp /\.|^/wp-content/debug\.log$
-            respond @hidden 404
-            encode gzip
-            php_fastcgi unix/${pool.socket}
-            file_server
-          '';
+          '' + siteBody;
+          # An https:// URL is terminated in front of the guest, but WordPress
+          # also requests it from inside: serve it on loopback with Caddy's
+          # internal CA (WordPress does not verify local requests). The :80
+          # site stays plain HTTP for the host proxy, so no redirects.
+          globalConfig = "admin off" + lib.optionalString httpsSelf "\nauto_https disable_redirects";
+          virtualHosts.${httpsSelfAddress} = lib.mkIf httpsSelf {
+            extraConfig = "bind ${if cfg.listenAddress == null then "127.0.0.1" else cfg.listenAddress}\ntls internal\n" + siteBody;
+          };
         };
 
         # Seeds the core and installs the site when needed, then keeps the

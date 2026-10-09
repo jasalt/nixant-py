@@ -144,10 +144,11 @@ check_installed() {
 # The site URL names a host port that is not reachable from inside the guest,
 # so ask the local web server for it with the configured Host header.
 check_http() {
-  local host=${url#http://} code admin location
-  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host" "http://$http_address/") || true
+  local host=${url#*://} code admin location proto=http
+  [[ "$url" == https://* ]] && proto=https
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host" -H "X-Forwarded-Proto: $proto" "http://$http_address/") || true
   [ "$code" = 200 ] || fail front-page "GET / returned '$code', expected 200"
-  admin=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $host" "http://$http_address/wp-admin/" || true)
+  admin=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $host" -H "X-Forwarded-Proto: $proto" "http://$http_address/wp-admin/" || true)
   code=${admin%% *}
   location=${admin#* }
   [ "$code" = 302 ] && [[ "$location" == */wp-login.php* ]] \
