@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -72,16 +73,20 @@ def test_proxy_print_setup() -> None:
     assert "CAP_NET_BIND_SERVICE" in result.output
 
 
+def _print(text: str) -> list[str]:
+    return [sys.executable, "-c", f"print({text!r})"]
+
+
 def test_command_routes_reads_another_hosts_export() -> None:
-    routes = command_routes(["echo", '{"a.localhost": 8001}'])
+    routes = command_routes(_print('{"a.localhost": 8001}'))
     assert routes == {"a.localhost": 8001}
 
 
 def test_command_routes_rejects_bad_output() -> None:
     with pytest.raises(NixantError, match="hostname to port"):
-        command_routes(["echo", '{"a.localhost": "x"}'])
+        command_routes(_print('{"a.localhost": "x"}'))
     with pytest.raises(NixantError, match="could not read routes"):
-        command_routes(["echo", "not json"])
+        command_routes(_print("not json"))
 
 
 def test_proxy_routes_prints_json(monkeypatch: pytest.MonkeyPatch) -> None:
