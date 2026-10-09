@@ -91,3 +91,9 @@ def test_proxy_routes_prints_json(monkeypatch: pytest.MonkeyPatch) -> None:
     result = CliRunner().invoke(app, ["proxy", "--routes"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {"a.localhost": 8001}
+
+
+@pytest.fixture(autouse=True)
+def _no_host_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The build sandbox has neither incus nor nix on PATH.
+    monkeypatch.setattr("nixant.cli.check_host_tools", lambda: None)
