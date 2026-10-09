@@ -10,7 +10,7 @@ import pytest
 
 from nixant.errors import CommandError, NixantError
 from nixant.incus import IncusProvider
-from nixant.models import MachineSpec, MachineState
+from nixant.models import MachineSpec, MachineState, PortSpec
 from nixant.nix.activate import activate, can_skip
 from nixant.ownership import PREFIX
 from nixant.run import Runner
@@ -55,6 +55,19 @@ def test_completion(spec: MachineSpec, rc: int, expected: str) -> None:
         PREFIX + "workdir": "/workspace",
     }
     runner.pipe.assert_not_called()
+
+
+def test_completion_records_and_clears_routes(spec: MachineSpec) -> None:
+    ports = (PortSpec(8105, 80, hostname="laive.localhost"), PortSpec(9, 9))
+    provider, runner, events = setup(0)
+    activate(provider, runner, replace(spec, ports=ports), SYSTEM)
+    assert events[-1][PREFIX + "routes"] == '{"laive.localhost": 8105}'
+    provider.unset_metadata.assert_not_called()
+
+    provider, runner, events = setup(0)
+    activate(provider, runner, spec, SYSTEM)
+    assert PREFIX + "routes" not in events[-1]
+    provider.unset_metadata.assert_called_once_with("test-dev", [PREFIX + "routes"])
 
 
 @pytest.mark.parametrize("rc", [1, 2, 3, 5])

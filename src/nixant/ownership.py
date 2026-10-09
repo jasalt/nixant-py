@@ -1,10 +1,11 @@
 """Ownership is the managed/project/target triple, never just a name."""
 
+import json
 from pathlib import Path, PurePosixPath
 
 from nixant.errors import NixantError
 from nixant.incus import IncusProvider
-from nixant.models import SCHEMA_VERSION, MachineState
+from nixant.models import SCHEMA_VERSION, MachineSpec, MachineState
 from nixant.planner import MOUNT_PREFIX
 from nixant.project import project_id, validate_target
 
@@ -20,6 +21,12 @@ def metadata(root: Path, target: str) -> dict[str, str]:
         PREFIX + "target": target,
         PREFIX + "schema": str(SCHEMA_VERSION),
     }
+
+
+def routes_value(spec: MachineSpec) -> str | None:
+    """The hostname -> host port map `nixant proxy` reads, or None without any."""
+    routes = {p.hostname: p.host for p in spec.ports if p.hostname}
+    return json.dumps(routes, sort_keys=True) if routes else None
 
 
 def check_owner(state: MachineState, root: Path, target: str) -> None:

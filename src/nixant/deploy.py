@@ -1,6 +1,5 @@
 """up and rebuild: evaluate, build, converge the instance, then activate."""
 
-import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -14,7 +13,7 @@ from nixant.naming import get_override
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build
 from nixant.nix.eval import evaluate
-from nixant.ownership import PREFIX, metadata, resolve
+from nixant.ownership import PREFIX, metadata, resolve, routes_value
 from nixant.planner import (
     Change,
     Effect,
@@ -184,13 +183,13 @@ def _refresh_runtime(
 ) -> None:
     """Settings that do not change the system closure still drive shell/exec."""
     runtime = {PREFIX + "user": spec.user.name, PREFIX + "workdir": spec.workdir}
-    routes = {p.hostname: p.host for p in spec.ports if p.hostname}
-    if routes:
-        runtime[PREFIX + "routes"] = json.dumps(routes, sort_keys=True)
+    routes = routes_value(spec)
+    if routes is not None:
+        runtime[PREFIX + "routes"] = routes
     stale = {k: v for k, v in runtime.items() if state.config.get(k) != v}
     if stale:
         provider.set_metadata(spec.instance_name, stale)
-    if not routes and PREFIX + "routes" in state.config:
+    if routes is None and PREFIX + "routes" in state.config:
         provider.unset_metadata(spec.instance_name, [PREFIX + "routes"])
 
 
