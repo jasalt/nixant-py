@@ -204,7 +204,7 @@ def _enter(ctx: typer.Context, target: str | None, command: list[str] | None) ->
         target = target_at(provider, root, Path.cwd()) or "dev"
     state = require_instance(lookup(provider, root, target), provider, root, target)
     if state.status != "Running":
-        raise NixantError(f"instance {state.name} is not running; run nixant up")
+        _offer_start(ctx, provider, root, target, state.name, state.kind)
     user = state.config.get(PREFIX + "user")
     workdir = state.config.get(PREFIX + "workdir")
     if not user or not workdir:
@@ -224,6 +224,28 @@ def _enter(ctx: typer.Context, target: str | None, command: list[str] | None) ->
         os.execvp(argv[0], argv)
     except OSError as exc:
         raise NixantError(f"cannot execute incus: {exc}") from exc
+
+
+def _offer_start(
+    ctx: typer.Context,
+    provider: IncusProvider,
+    root: Path,
+    target: str,
+    name: str,
+    kind: str,
+) -> None:
+    """Start a stopped or frozen instance on request, as limactl shell does."""
+    if not _interactive() or not typer.confirm(
+        f"Do you want to start the instance {name} now?", default=True
+    ):
+        raise NixantError(
+            f"instance {name} is not running; run nixant restart {target}"
+        )
+    runner = ctx.obj["runner"]
+    with target_lock(root, target):
+        # Starting a frozen instance resumes it.
+        provider.start(name)
+        wait_ready(provider, name, kind, verbose=runner.verbose)
 
 
 @app.command()

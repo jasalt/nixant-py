@@ -150,6 +150,44 @@ def test_enter_preconditions(
     execute.assert_not_called()
 
 
+@pytest.mark.parametrize("status", ["Stopped", "Frozen"])
+def test_enter_offers_to_start_a_stopped_instance(
+    enter: tuple[Mock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: str,
+) -> None:
+    lookup, execute = enter
+    lookup.return_value = replace(lookup.return_value, status=status)
+    monkeypatch.setattr("nixant.cli._interactive", lambda: True)
+    start = Mock()
+    monkeypatch.setattr(IncusProvider, "start", start)
+    ready = Mock(return_value="running")
+    monkeypatch.setattr("nixant.cli.wait_ready", ready)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    result = CliRunner().invoke(app, ["shell"], input="\n")
+    assert result.exit_code == 0, result.output
+    assert "Do you want to start the instance owned-dev now? [Y/n]" in result.output
+    start.assert_called_once_with("owned-dev")
+    assert ready.call_args.args[1:] == ("owned-dev", "container")
+    execute.assert_called_once()
+
+
+def test_enter_declined_start_leaves_the_instance_stopped(
+    enter: tuple[Mock, Mock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lookup, execute = enter
+    lookup.return_value = replace(lookup.return_value, status="Stopped")
+    monkeypatch.setattr("nixant.cli._interactive", lambda: True)
+    start = Mock()
+    monkeypatch.setattr(IncusProvider, "start", start)
+    result = CliRunner().invoke(app, ["shell"], input="n\n")
+    assert result.exit_code == 1
+    assert "not running; run nixant restart dev" in result.output
+    start.assert_not_called()
+    execute.assert_not_called()
+
+
 def test_exec_missing_command(enter: tuple[Mock, Mock]) -> None:
     assert CliRunner().invoke(app, ["exec"]).exit_code == 2
     enter[1].assert_not_called()
