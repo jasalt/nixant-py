@@ -100,7 +100,17 @@ def caddy_config(
         for hostname, port in sorted(routes.items())
     ]
     # Anything else, including a rebinding attacker's name, reaches no instance.
-    handlers.append({"handle": [{"handler": "static_response", "status_code": 404}]})
+    handlers.append(
+        {
+            "handle": [
+                {
+                    "handler": "static_response",
+                    "status_code": 404,
+                    "body": "nixant proxy: no route for this host\n",
+                }
+            ]
+        }
+    )
     server: dict[str, Any] = {"listen": listen, "routes": handlers}
     apps: dict[str, Any] = {
         "http": {
@@ -208,9 +218,10 @@ def serve(
     listen = listen_addresses(port, https_port)
 
     def current() -> dict[str, Any]:
-        return caddy_config(
-            routes(), admin, listen, http_port=port, https_port=https_port
-        )
+        table = routes()
+        shown = ", ".join(f"{name} -> {p}" for name, p in sorted(table.items()))
+        print(f"nixant proxy: routes: {shown or 'none'}", file=sys.stderr, flush=True)
+        return caddy_config(table, admin, listen, http_port=port, https_port=https_port)
 
     admin.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="nixant-proxy-") as scratch:
