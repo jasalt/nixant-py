@@ -31,6 +31,7 @@ def enter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Mock, Mock]:
     monkeypatch.setattr(
         "nixant.cli.IncusProvider", lambda runner: IncusProvider(Runner())
     )
+    monkeypatch.setattr(IncusProvider, "find", lambda self, metadata: [])
     execute = Mock()
     monkeypatch.setattr("nixant.cli.os.execvp", execute)
     for evaluation in ("nixant.deploy.evaluate", "nixant.cli.evaluate_spec"):

@@ -17,6 +17,7 @@ def cleanup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Mock, Mock
     monkeypatch.setattr("nixant.cli.discover_project", lambda: tmp_path)
     lookup = Mock(return_value=MachineState("owned", "Running", "container", {}, {}))
     provider = Mock()
+    provider.find.return_value = []
     monkeypatch.setattr("nixant.cli.lookup", lookup)
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda _: provider)
     for evaluation in ("nixant.deploy.evaluate", "nixant.cli.evaluate_spec"):

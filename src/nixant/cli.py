@@ -176,7 +176,8 @@ def rebuild(
 
 def _enter(ctx: typer.Context, target: str, command: list[str] | None) -> None:
     provider = IncusProvider(ctx.obj["runner"])
-    state = require_instance(lookup(provider, discover_project(), target))
+    root = discover_project()
+    state = require_instance(lookup(provider, root, target), provider, root, target)
     if state.status != "Running":
         raise NixantError(f"instance {state.name} is not running; run nixant up")
     user = state.config.get(PREFIX + "user")
@@ -227,7 +228,9 @@ def down(
     root = discover_project()
     provider = IncusProvider(ctx.obj["runner"])
     with target_lock(root, target):
-        state = require_instance(lookup(provider, root, target, require_schema=False))
+        state = require_instance(
+            lookup(provider, root, target, require_schema=False), provider, root, target
+        )
         if state.status == "Stopped":
             typer.echo(f"{state.name}: already stopped")
             return
@@ -259,7 +262,9 @@ def restart(
     runner = ctx.obj["runner"]
     provider = IncusProvider(runner)
     with target_lock(root, target):
-        state = require_instance(lookup(provider, root, target, require_schema=False))
+        state = require_instance(
+            lookup(provider, root, target, require_schema=False), provider, root, target
+        )
         if state.status in ("Stopped", "Frozen"):
             # Starting a frozen instance resumes it; a clean restart of one hangs.
             provider.start(state.name)
@@ -471,7 +476,9 @@ def snapshot_command(
     root = discover_project()
     provider = IncusProvider(ctx.obj["runner"])
     with target_lock(root, target):
-        state = require_instance(lookup(provider, root, target, require_schema=False))
+        state = require_instance(
+            lookup(provider, root, target, require_schema=False), provider, root, target
+        )
         if delete:
             if name is None:
                 raise UsageError("--delete needs a snapshot NAME")
@@ -491,7 +498,9 @@ def snapshots_command(
     """List the snapshots of an owned environment."""
     root = discover_project()
     provider = IncusProvider(ctx.obj["runner"])
-    state = require_instance(lookup(provider, root, target, require_schema=False))
+    state = require_instance(
+        lookup(provider, root, target, require_schema=False), provider, root, target
+    )
     found = provider.snapshot_list(state.name)
     if not found:
         typer.echo(f"{state.name}: no snapshots")
@@ -510,7 +519,9 @@ def restore(
     runner = ctx.obj["runner"]
     provider = IncusProvider(runner)
     with target_lock(root, target):
-        state = require_instance(lookup(provider, root, target, require_schema=False))
+        state = require_instance(
+            lookup(provider, root, target, require_schema=False), provider, root, target
+        )
         snapshots.restore(provider, state, name, root)
         after = provider.inspect(state.name)
         if after is not None and after.status == "Running":

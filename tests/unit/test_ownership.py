@@ -7,7 +7,14 @@ import pytest
 from nixant.errors import NixantError
 from nixant.incus import IncusProvider
 from nixant.models import MachineState
-from nixant.ownership import PREFIX, check_owner, lookup, metadata, resolve
+from nixant.ownership import (
+    PREFIX,
+    check_owner,
+    lookup,
+    metadata,
+    require_instance,
+    resolve,
+)
 
 
 @pytest.fixture
@@ -37,6 +44,33 @@ def test_metadata_lookup(state: MachineState, tmp_path: Path) -> None:
     with pytest.raises(NixantError, match="multiple instances.*copy, test-dev"):
         lookup(provider, tmp_path, "dev")
     provider.inspect.assert_not_called()
+
+
+def test_require_instance_names_existing_targets(
+    state: MachineState, tmp_path: Path
+) -> None:
+    provider = Mock(spec=IncusProvider)
+    assert require_instance(state, provider, tmp_path, "dev") is state
+    provider.find.assert_not_called()
+    provider.find.return_value = []
+    with pytest.raises(
+        NixantError, match=r"^target dev does not exist; run nixant up dev$"
+    ):
+        require_instance(None, provider, tmp_path, "dev")
+    provider.find.return_value = [
+        MachineState("wp-b", "Running", "container", metadata(tmp_path, "b"), {}),
+        MachineState("wp-a", "Stopped", "container", metadata(tmp_path, "a"), {}),
+    ]
+    with pytest.raises(
+        NixantError,
+        match=r"target dev does not exist; this project has: a, b\. "
+        r"Name one of them as the target, or run nixant up dev",
+    ):
+        require_instance(None, provider, tmp_path, "dev")
+    assert provider.find.call_args.args[0] == {
+        PREFIX + "managed": "true",
+        PREFIX + "project": metadata(tmp_path, "dev")[PREFIX + "project"],
+    }
 
 
 @pytest.mark.parametrize("schema", ["0", "2", ""])

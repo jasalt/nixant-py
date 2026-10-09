@@ -103,7 +103,18 @@ def resolve(
     return state
 
 
-def require_instance(state: MachineState | None) -> MachineState:
-    if state is None:
-        raise NixantError("environment does not exist; run nixant up")
-    return state
+def require_instance(
+    state: MachineState | None, provider: IncusProvider, root: Path, target: str
+) -> MachineState:
+    if state is not None:
+        return state
+    found = provider.find(
+        {PREFIX + "managed": "true", PREFIX + "project": project_id(root)}
+    )
+    others = sorted({item.config.get(PREFIX + "target", "") for item in found} - {""})
+    if not others:
+        raise NixantError(f"target {target} does not exist; run nixant up {target}")
+    raise NixantError(
+        f"target {target} does not exist; this project has: {', '.join(others)}. "
+        f"Name one of them as the target, or run nixant up {target}"
+    )

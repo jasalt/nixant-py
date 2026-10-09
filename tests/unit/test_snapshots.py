@@ -147,6 +147,7 @@ def cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
     monkeypatch.setattr("nixant.cli.discover_project", lambda: tmp_path)
     provider = Mock()
     provider.snapshot_list.return_value = []
+    provider.find.return_value = []
     provider.inspect.return_value = STATE
     monkeypatch.setattr("nixant.cli.IncusProvider", lambda _: provider)
     lookup = Mock(return_value=STATE)
