@@ -65,6 +65,8 @@ Everything else is ordinary NixOS and home-manager configuration, attached to `u
 
 ## Extension modules
 
+For authoring and consuming extensions in separate repositories, see [External extension development](docs/extensions.md): repository trade-offs, a minimal module and template, local checkout overrides, testing and releases.
+
 Other NixOS modules can build on nixant, for example a module that sets up a web stack and reads the project's user and forwarded ports. The flake exports these modules:
 
 - `nixosModules.container` and `nixosModules.vm` are what a project imports; each pulls in the options and creates the guest user.
