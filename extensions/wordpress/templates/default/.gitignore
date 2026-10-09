@@ -1,0 +1,12 @@
+# The WordPress site in public/ is shared with the guest: core, wp-config.php,
+# uploads and third-party plugins come from WordPress, not from git. Track your
+# own code by adding a `!` line per plugin or theme.
+/public/*
+!/public/wp-content/
+/public/wp-content/*
+!/public/wp-content/plugins/
+!/public/wp-content/themes/
+/public/wp-content/plugins/*
+/public/wp-content/themes/*
+# !/public/wp-content/plugins/my-plugin/
+# !/public/wp-content/themes/my-theme/
