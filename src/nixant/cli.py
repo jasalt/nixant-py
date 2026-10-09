@@ -216,6 +216,10 @@ def shell(
     _enter(ctx, target, None)
 
 
+# For Vagrant habits; like shell it runs incus exec, not SSH.
+app.command("ssh", help="Alias of shell (incus exec, not SSH).")(shell)
+
+
 @app.command(
     "exec",
     context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},

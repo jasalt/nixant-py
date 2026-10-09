@@ -93,7 +93,7 @@ Extension modules may read these options. The container and VM modules set `nixa
 ```console
 $ nixant init            # create flake.nix from the default template
 $ nixant up              # build, create/start, transfer, activate (target "dev")
-$ nixant shell           # login shell in the guest, in the matching directory
+$ nixant shell           # login shell in the guest, in the matching directory (alias: ssh)
 $ nixant exec -- make    # run one command
 $ nixant rebuild         # re-build and always re-activate a running instance
 $ nixant status          # metadata and cached build state, no evaluation

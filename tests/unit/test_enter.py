@@ -69,9 +69,10 @@ def test_exec_arguments(
     assert "runuser" in " ".join(args)
 
 
-def test_shell(enter: tuple[Mock, Mock]) -> None:
+@pytest.mark.parametrize("command", ["shell", "ssh"])
+def test_shell(enter: tuple[Mock, Mock], command: str) -> None:
     _, execute = enter
-    assert CliRunner().invoke(app, ["shell"]).exit_code == 0
+    assert CliRunner().invoke(app, [command]).exit_code == 0
     assert (
         'exec -l "$(getent passwd "$(id -un)" | cut -d: -f7)"'
         in execute.call_args.args[1]
