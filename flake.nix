@@ -11,21 +11,34 @@
       # Canonical location generated projects depend on. Only clean builds
       # declare it: they have a revision to pin the project's lock to.
       flakeUrl = "github:jasalt/nixant-py";
+      wordpress = ./extensions/wordpress;
+      wp-site = pkgs.callPackage (wordpress + "/nix/wp-site.nix") { };
     in {
-      packages.${system}.default = python.pkgs.buildPythonApplication {
-        pname = "nixant";
-        version = "0.1.0";
-        src = self;
-        pyproject = true;
-        build-system = [ python.pkgs.hatchling ];
-        dependencies = [ python.pkgs.typer ];
-        nativeCheckInputs = [ python.pkgs.pytestCheckHook pkgs.git ];
-        pythonImportsCheck = [ "nixant.cli" ];
-        makeWrapperArgs = [
-          "--set NIXANT_SELF ${self}"
-          "--set NIXANT_REV '${self.rev or ""}'"
-        ] ++ pkgs.lib.optional (self ? rev) "--set NIXANT_FLAKE_URL ${flakeUrl}";
-        meta.mainProgram = "nixant";
+      packages.${system} = {
+        default = python.pkgs.buildPythonApplication {
+          pname = "nixant";
+          version = "0.1.0";
+          src = self;
+          pyproject = true;
+          build-system = [ python.pkgs.hatchling ];
+          dependencies = [ python.pkgs.typer ];
+          nativeCheckInputs = [ python.pkgs.pytestCheckHook pkgs.git ];
+          pythonImportsCheck = [ "nixant.cli" ];
+          makeWrapperArgs = [
+            "--set NIXANT_SELF ${self}"
+            "--set NIXANT_REV '${self.rev or ""}'"
+          ] ++ pkgs.lib.optional (self ? rev) "--set NIXANT_FLAKE_URL ${flakeUrl}";
+          meta.mainProgram = "nixant";
+        };
+
+        inherit wp-site;
+        # Boots a VM (needs KVM), so it is not part of `nix flake check`:
+        # nix build .#wordpress-vm-test
+        wordpress-vm-test = import (wordpress + "/tests/vm.nix") {
+          inherit pkgs;
+          nixant = self;
+          wordpress = self.nixosModules.wordpress;
+        };
       };
 
       apps.${system}.default = {
@@ -37,6 +50,7 @@
       nixosModules.vm = import ./nix/modules/vm.nix;
       nixosModules.options = import ./nix/modules/options.nix;
       nixosModules.devenv = import ./nix/modules/devenv.nix;
+      nixosModules.wordpress = import (wordpress + "/nix/wordpress.nix");
 
       templates = {
         default = {
@@ -54,6 +68,10 @@
         devenv = {
           path = ./nix/templates/devenv;
           description = "Default container plus devenv, with a starter devenv.nix";
+        };
+        wordpress = {
+          path = wordpress + "/template";
+          description = "WordPress site with MariaDB, PHP-FPM, Caddy and Mailpit, served from public/";
         };
       };
 
@@ -84,6 +102,26 @@
         } ''
           echo "$results" > "$out"
         '';
+        wordpress-eval = pkgs.runCommand "nixant-wordpress-eval-tests" {
+          results = builtins.toJSON (import (wordpress + "/tests/eval.nix") {
+            inherit nixpkgs system;
+            nixant = self;
+            wordpress = self.nixosModules.wordpress;
+          });
+        } ''
+          echo "$results" > "$out"
+        '';
+        wordpress-template = pkgs.runCommand "nixant-wordpress-template-tests" {
+          results = builtins.toJSON (import (wordpress + "/tests/template.nix") {
+            inherit nixpkgs system;
+            nixant = self;
+            template = wordpress + "/template";
+            snippet = ./nix/snippets/wordpress.nix;
+          });
+        } ''
+          echo "$results" > "$out"
+        '';
+        inherit wp-site;
       };
 
       devShells.${system}.default = pkgs.mkShell {

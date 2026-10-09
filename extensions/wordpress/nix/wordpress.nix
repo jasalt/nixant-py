@@ -174,9 +174,9 @@ in {
         # file in the project's wp-content (which may be deployed elsewhere).
         # WordPress turns callbacks registered in $wp_filter before it loads
         # into hooks.
-        mailPrepend = pkgs.writeText "nixant-wp-prepend.php" ''
+        mailPrepend = pkgs.writeText "nixant-wordpress-prepend.php" ''
           <?php
-          // nixant-wp: replace an invalid WordPress mail sender, such as
+          // nixant wordpress: replace an invalid WordPress mail sender, such as
           // wordpress@localhost, so mail reaches Mailpit.
           $GLOBALS['wp_filter']['wp_mail_from'][10][] = array(
             'function' => static function ( $from ) {

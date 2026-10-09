@@ -1,4 +1,4 @@
-# wp-site: setup and check logic for the nixant-wp WordPress site.
+# wp-site: setup and check logic for the nixant WordPress site.
 #
 # Everything site-specific comes from the JSON file named by WP_SITE_SETTINGS,
 # which the NixOS module generates. The web root is a project directory on the

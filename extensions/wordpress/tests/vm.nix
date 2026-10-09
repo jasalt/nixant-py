@@ -19,7 +19,7 @@ let
   site = "/workspace/public";
   get = path: "curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost:8081' http://127.0.0.1${path}";
 in pkgs.testers.runNixOSTest {
-  name = "nixant-wp";
+  name = "nixant-wordpress";
 
   nodes.machine = { ... }: {
     imports = [ nixant.nixosModules.options wordpress ];

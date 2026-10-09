@@ -6,13 +6,12 @@
 # edits a plugin on the host and destroys both.
 # Instances are named nixwp-it-<pid>-{a,b} and removed on every exit path.
 #
-# Needs Nix with flakes, Incus (your user in incus-admin) and a nixant
-# checkout: NIXANT_SRC defaults to ../nixant. Do not edit that checkout while
-# this runs, since nixant is built from its working tree.
+# Needs Nix with flakes and Incus (your user in incus-admin). nixant and the
+# template come from this checkout's working tree; do not edit it while this
+# runs.
 set -euo pipefail
 
-repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-nixant_src=$(cd "${NIXANT_SRC:-$repo/../nixant}" && pwd)
+nixant_src=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 work=$(mktemp -d)
 prefix="nixwp-it-$$"
 clients=(a b)
@@ -60,9 +59,10 @@ make_client() {
   (
     cd "$dir"
     git init -q
-    nix flake init -t "path:$repo" >/dev/null
+    nix flake init -t "path:$nixant_src#wordpress" >/dev/null
+    sed -i "s|nixant-template-url|path:$nixant_src|" flake.nix
     sed -i \
-      -e "s/instanceName = \"client-dev\"/instanceName = \"$prefix-$client\"/" \
+      -e "s/instanceName = \"nixant-template-dev\"/instanceName = \"$prefix-$client\"/" \
       -e "s/user.uid = 1000/user.uid = $(id -u)/" \
       -e "s/host = 8081;/host = ${ports[$client]};/" \
       -e "s/host = 8025;/host = ${ui_ports[$client]};/" \
@@ -74,9 +74,7 @@ make_client() {
 add_action( 'wp_footer', function () { echo '<!-- it-plugin v1 -->'; } );
 PHP
     git add -A
-    nix flake lock \
-      --override-input nixant "path:$nixant_src" \
-      --override-input nixant-wp "path:$repo" >/dev/null 2>&1
+    nix flake lock >/dev/null 2>&1
     git add -A
   )
 }

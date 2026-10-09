@@ -155,5 +155,5 @@ let
     urlPortTakenByMariadb = fails "Mailpit or MariaDB" { extra.wordpress.url = "http://localhost:3306"; };
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))
-  "nixant-wp eval tests failed: ${lib.concatStringsSep ", " (builtins.attrNames (lib.filterAttrs (_: value: !value) tests))}";
+  "wordpress eval tests failed: ${lib.concatStringsSep ", " (builtins.attrNames (lib.filterAttrs (_: value: !value) tests))}";
   tests

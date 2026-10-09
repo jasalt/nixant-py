@@ -1,6 +1,6 @@
-# nixant-wp
+# WordPress on nixant
 
-An isolated WordPress development environment per client project, built as a NixOS module on top of [nixant](https://github.com/jasalt/nixant-py). Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server and Mailpit inbox. Nothing is shared between clients.
+An isolated WordPress development environment per client project: nixant's `nixosModules.wordpress` and `templates.wordpress`, an extension built on [nixant's extension interface](../../README.md#extension-modules). Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server and Mailpit inbox. Nothing is shared between clients.
 
 The whole WordPress site, meaning core, `wp-config.php` and `wp-content`, lives in a directory of the project on the host (`public/` by default) and is served from there by the guest. Your editor and language server see every file WordPress runs, and anything WordPress writes, such as uploads, plugin installs and core updates, shows up on the host right away, owned by you. The guest holds only the database and the services.
 
@@ -19,11 +19,8 @@ Status: MVP. One site per instance. See `plan.md` for the design and what comes 
 
 ```console
 $ mkdir client-a && cd client-a && git init
-$ nix flake init -t github:jasalt/nixant-wp
-$ $EDITOR nix/site.nix            # instanceName, uid, ports
-$ git add -A
-$ nix flake lock
-$ git add -A
+$ nixant init wordpress           # flake.nix, nix/site.nix, .gitignore and flake.lock, added to git
+$ $EDITOR nix/site.nix            # uid, ports
 $ nixant up
 ```
 
@@ -33,9 +30,9 @@ When `up` finishes (`... ready`):
 - the Mailpit inbox is at `http://localhost:8025`;
 - `public/` holds the WordPress installation.
 
-`flake.nix` and `nix/site.nix` must be tracked in git, as for any nixant project.
+`nixant init wordpress` names the instance after the directory (`client-a-dev`) and adds the files to git; `flake.nix` and `nix/site.nix` must stay tracked, as for any nixant project. In a directory that already has a `flake.nix`, it writes nothing and prints the inputs and modules to add by hand.
 
-The template's `flake.nix` makes nixant-wp's own `nixant` input (used only by nixant-wp's tests) follow the project's, so the project locks a single nixant. To work on nixant or nixant-wp themselves, lock a project to local checkouts with `nix flake lock --override-input nixant path:/path/to/nixant-py --override-input nixant-wp path:/path/to/nixant-wp`, and back to the published ones with `nix flake update nixant nixant-wp`.
+The project has a single input besides nixpkgs: nixant, which carries both the container module and the WordPress module. To work on nixant itself, lock a project to a local checkout with `nix flake lock --override-input nixant path:/path/to/nixant`, and back to the published one with `nix flake update nixant`.
 
 ### An existing site
 
@@ -142,7 +139,7 @@ PHP's `sendmail_path` points at `mailpit sendmail`, for PHP-FPM and for WP-CLI, 
 
 ### Editor navigation without the shared web root
 
-If editor navigation were the only goal, a lighter option would be to keep WordPress inside the guest and point the language server at the WordPress source instead, for example intelephense's `includePaths` at the Nix store copy of core, or the `php-stubs/wordpress-stubs` package. nixant-wp shares the whole web root because it also makes the site's files, uploads and updates directly usable on the host.
+If editor navigation were the only goal, a lighter option would be to keep WordPress inside the guest and point the language server at the WordPress source instead, for example intelephense's `includePaths` at the Nix store copy of core, or the `php-stubs/wordpress-stubs` package. The module shares the whole web root because it also makes the site's files, uploads and updates directly usable on the host.
 
 ## State, snapshots and logs
 
@@ -162,30 +159,35 @@ If `wordpress-setup.service` fails, `nixant up` still finishes but warns `activa
 
 ## Agent isolation
 
-`nixant.isolation = "agent"` works with nixant-wp. nixant allows forwarded ports on `127.0.0.1` in that mode, so the site keeps its derived URL and the agent-isolated guest is still reachable from the host browser. The site itself listens only on the guest's loopback (`wordpress.listenAddress`), so other instances on the Incus bridge, agent-isolated or not, cannot reach its wp-admin. The guest user has no sudo; the setup service and the web stack run as that user, so they do not need it.
+`nixant.isolation = "agent"` works with the WordPress module. nixant allows forwarded ports on `127.0.0.1` in that mode, so the site keeps its derived URL and the agent-isolated guest is still reachable from the host browser. The site itself listens only on the guest's loopback (`wordpress.listenAddress`), so other instances on the Incus bridge, agent-isolated or not, cannot reach its wp-admin. The guest user has no sudo; the setup service and the web stack run as that user, so they do not need it.
 
-The web root is in the workspace, which is the one mount writable under agent isolation. PHP code in the site (core, every plugin) runs as the guest user and can write the whole project directory on the host, just as the agent can. See nixant's README for what the profile does and does not restrict.
+The web root is in the workspace, which is the one mount writable under agent isolation. PHP code in the site (core, every plugin) runs as the guest user and can write the whole project directory on the host, just as the agent can. See [nixant's README](../../README.md#agent-isolation) for what the profile does and does not restrict.
 
 ## Tests
 
+From the repository root:
+
 ```console
-$ nix flake check                 # evaluation tests and shellcheck, fast
-$ nix build .#vm-test -L          # boots a NixOS VM (needs KVM) and runs wp-site check
-$ tests/integration.sh            # real Incus: two clients in parallel, cleans up
+$ nix flake check                            # includes wordpress-eval, wordpress-template and wp-site (shellcheck)
+$ nix build .#wordpress-vm-test -L           # boots a NixOS VM (needs KVM) and runs wp-site check
+$ extensions/wordpress/tests/integration.sh  # real Incus: two clients in parallel, cleans up
 ```
 
-The integration script builds nixant from `../nixant` (override with `NIXANT_SRC`), creates two clients from the template under the `nixwp-it-<pid>` prefix, and destroys them on every exit path. Do not edit the nixant checkout while it runs.
+The integration script builds nixant from this checkout's working tree, creates two clients from the template under the `nixwp-it-<pid>` prefix, and destroys them on every exit path. Do not edit the checkout while it runs.
 
 ## Layout
 
+Everything lives in `extensions/wordpress/`; the root `flake.nix` exports it.
+
 ```text
-flake.nix                  nixosModules.{wordpress,default}, templates.default, checks, packages
-nix/wordpress.nix          the NixOS module (options, services, setup unit)
-nix/wp-site.{nix,sh}       the setup and check script, packaged with its tools
-templates/default/         client flake, nix/site.nix and .gitignore
+nix/wordpress.nix          the NixOS module (nixosModules.wordpress)
+nix/wp-site.{nix,sh}       the setup and check script, packaged with its tools (packages.wp-site)
+template/                  templates.wordpress: client flake, nix/site.nix and .gitignore
 tests/                     eval.nix, template.nix, vm.nix, integration.sh
 plan.md                    design and decisions
 ```
+
+`nix/snippets/wordpress.nix` at the repository root is what `nixant init wordpress` prints for an existing `flake.nix`.
 
 ## Limits
 

@@ -1,14 +1,14 @@
-# nixant-wp: implementation plan
+# WordPress extension: implementation plan
 
-An isolated WordPress development environment per client project, built as a NixOS module on top of [nixant](https://github.com/jasalt/nixant-py). Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server, Mailpit, snapshots and (optionally) agent isolation.
+An isolated WordPress development environment per client project, built as a NixOS module on top of nixant's extension interface. Each client repository is its own nixant project, so it gets its own Incus container with its own MariaDB, PHP-FPM, web server, Mailpit, snapshots and (optionally) agent isolation.
 
-The whole WordPress installation (core, `wp-config.php`, `wp-content`) lives in a directory of the client repository on the host and is served from the workspace mount; the guest holds the database and the services. WordPress is mutable and manages itself; nixant-wp provides the stack, creates what is missing and keeps the database connection and URL current.
+The whole WordPress installation (core, `wp-config.php`, `wp-content`) lives in a directory of the client repository on the host and is served from the workspace mount; the guest holds the database and the services. WordPress is mutable and manages itself; the module provides the stack, creates what is missing and keeps the database connection and URL current.
 
 This plan covers the MVP: one site per instance, set up by `nixant up`. Production pull/push (the bvv workflow), Xdebug, `.test` hostnames and similar extras come after it.
 
 ## Goals
 
-- `nix flake init -t <nixant-wp>` + `nixant up` gives a working WordPress at `http://localhost:<port>` and a Mailpit inbox, with no manual steps.
+- `nixant init wordpress` + `nixant up` gives a working WordPress at `http://localhost:<port>` and a Mailpit inbox, with no manual steps.
 - Every file WordPress runs is on the host, so editors and language servers navigate core, plugins and themes; edits are live on the next request.
 - Files WordPress writes (uploads, plugin and theme installs, core updates) appear on the host, owned by the host user.
 - An existing site (a `wp-content` from git, or a full copy from production) can be dropped into the web root and works after a database import.
@@ -28,8 +28,8 @@ This plan covers the MVP: one site per instance, set up by `nixant up`. Producti
 
 | # | Topic | Decision |
 |---|---|---|
-| 1 | Repository | Separate repo `nixant-wp`; nixant stays generic. |
-| 2 | Coupling | The module reads `config.nixant.user.name`, `config.nixant.ports` and `config.nixant.mounts.workspace`; the client flake imports both nixant's module and this one. `nixant-wp` does not take nixant as a runtime input. |
+| 1 | Repository | `extensions/wordpress` in nixant's repository (until 2026-10 the separate `nixant-wp` repository, merged with its history), exported by nixant's flake as `nixosModules.wordpress` and `templates.wordpress`. The core modules stay generic: the WordPress module uses only the extension interface below. |
+| 2 | Coupling | The module reads `config.nixant.user.name`, `config.nixant.ports` and `config.nixant.mounts.workspace`; the client flake imports `nixant.nixosModules.container` and `nixant.nixosModules.wordpress`. The module file imports nothing from nixant itself. |
 | 3 | Isolation | One site per nixant instance; client repo = nixant project. |
 | 4 | Services | Native NixOS units: MariaDB, one PHP-FPM pool, Caddy, Mailpit. No devenv, no process-compose. |
 | 5 | Identity | PHP-FPM, Caddy and the setup unit run as the nixant guest user, so the idmapped workspace mount is readable and writable without extra groups, and files WordPress creates belong to the host user. |
@@ -50,7 +50,7 @@ Versions in the current nixant pin (nixos-unstable `151fa4e`): WordPress 7.1.2, 
 
 ## Interface with nixant
 
-nixant-wp depends on these nixant options. They are a public interface for extension modules, documented in nixant.
+The WordPress module depends on these nixant options. They are a public interface for extension modules, documented in nixant.
 
 - `nixant.user.name`: runs PHP-FPM, Caddy and setup; owns the web root's files.
 - `nixant.ports`: `wordpress.url` and the Mailpit hint are derived from the entries whose `guest` is 80 and the Mailpit UI port.
@@ -62,23 +62,22 @@ The module asserts that `config.nixant` exists, with a message telling the user 
 ## Repository layout
 
 ```text
-nixant-wp/
-  flake.nix                  # nixosModules.{wordpress,default}, templates.default, checks, packages
-  flake.lock                 # nixpkgs (+ nixant for checks only)
-  nix/wordpress.nix          # the NixOS module
+extensions/wordpress/        # wired into nixant's root flake.nix
+  nix/wordpress.nix          # the NixOS module (nixosModules.wordpress)
   nix/wp-site.nix            # writeShellApplication wrapping wp-site.sh with wp-cli, mariadb client, rsync
   nix/wp-site.sh             # setup/check logic
-  templates/default/
-    flake.nix                # client flake: nixpkgs, nixant, nixant-wp, follows
+  template/                  # templates.wordpress
+    flake.nix                # client flake: nixpkgs and nixant, nixant following nixpkgs
     nix/site.nix             # nixant + wordpress settings for one client
     .gitignore               # keeps the installation in public/ out of git
   tests/
-    eval.nix                 # evaluation checks used by `nix flake check`
-    template.nix             # the template evaluates to a system
-    vm.nix                   # NixOS VM test (packages.vm-test)
+    eval.nix                 # checks.wordpress-eval
+    template.nix             # checks.wordpress-template: the template evaluates to a system
+    vm.nix                   # NixOS VM test (packages.wordpress-vm-test)
     integration.sh           # opt-in: real nixant up against Incus
   README.md
   plan.md
+nix/snippets/wordpress.nix   # what `nixant init wordpress` prints for an existing flake.nix
 ```
 
 ## Module specification (`nix/wordpress.nix`)
@@ -120,16 +119,16 @@ Assertions: nixant module imported; `root` is safe; workspace mount enabled; `ur
 
 `wp-site check`: the site is installed; `/` returns 200 and `/wp-admin/` redirects to the login on `listenAddress`; WordPress gets 200 for its own URL (`wp_remote_get( home_url() )`); Mailpit's API answers and a `wp eval 'wp_mail(...)'` message is visible through it.
 
-### Template (`templates/default`)
+### Template (`template/`)
 
-`flake.nix` with inputs `nixpkgs` (nixos-unstable), `nixant` and `nixant-wp`, both following `nixpkgs`, and `nixosConfigurations.dev` importing `nixant.nixosModules.container`, `nixant-wp.nixosModules.wordpress` and `./nix/site.nix`. `nix/site.nix` sets `nixant.instanceName`, `nixant.user.uid`, `nixant.ports` (8081→80, 8025→8025) and `wordpress = { enable; title; root = "public"; }`. `.gitignore` as in Decision 17. The template makes nixant-wp's test-only `nixant` input follow the project's (`nixant-wp.inputs.nixant.follows = "nixant"`), so a project locks one nixant; the README documents `--override-input` for working against local checkouts.
+`flake.nix` with inputs `nixpkgs` (nixos-unstable) and `nixant` following it, and `nixosConfigurations.dev` importing `nixant.nixosModules.container`, `nixant.nixosModules.wordpress` and `./nix/site.nix`. `nix/site.nix` sets `nixant.instanceName`, `nixant.user.uid`, `nixant.ports` (8081→80, 8025→8025) and `wordpress = { enable; title; root = "public"; }`. `.gitignore` as in Decision 17. The nixant URL and `nixant.instanceName` are `nixant init`'s markers, which it replaces with the CLI's flake URL and a name derived from the directory.
 
 ## Workflow (MVP)
 
 ```console
 $ mkdir client-a && cd client-a && git init
-$ nix flake init -t github:jasalt/nixant-wp && git add -A
-$ $EDITOR nix/site.nix               # instanceName, uid, ports
+$ nixant init wordpress              # flake.nix, nix/site.nix, .gitignore, flake.lock
+$ $EDITOR nix/site.nix               # uid, ports
 $ nixant up                          # http://localhost:8081, Mailpit http://localhost:8025, files in public/
 $ nixant exec -- wp plugin install query-monitor --activate
 $ $EDITOR public/wp-content/themes/my-theme/functions.php   # live on the next request
@@ -140,7 +139,7 @@ $ nixant down / nixant destroy       # destroy keeps public/, drops the database
 ## Testing
 
 - **Evaluation (`nix flake check`):** evaluate a guest with nixant's container module down to `system.build.toplevel.drvPath`; check the pool, Caddy site (root, bind, hidden paths), Mailpit instance, setup unit and settings, the prepend file in both PHP-FPM and WP-CLI, and the assertion messages for a missing nixant module, an unsafe root, a disabled workspace and an underivable URL. The template evaluates the same way.
-- **NixOS VM test (`nix build .#vm-test`, needs KVM):** nixant's options module, the WordPress module and a `/workspace/public/wp-content` that already holds a plugin. Checks that the core is seeded next to it, `wp-site check`, plugin activation through WP-CLI, mail from PHP-FPM with WordPress's own sender, the loopback-only listeners on port 80 and the URL's port, hidden dotfiles and error log, that rerunning setup leaves an unchanged `wp-config.php` alone, and that a foreign `DB_HOST` is reset while other files stay.
+- **NixOS VM test (`nix build .#wordpress-vm-test`, needs KVM):** nixant's options module, the WordPress module and a `/workspace/public/wp-content` that already holds a plugin. Checks that the core is seeded next to it, `wp-site check`, plugin activation through WP-CLI, mail from PHP-FPM with WordPress's own sender, the loopback-only listeners on port 80 and the URL's port, hidden dotfiles and error log, that rerunning setup leaves an unchanged `wp-config.php` alone, and that a foreign `DB_HOST` is reset while other files stay.
 - **Integration (opt-in, real Incus):** `tests/integration.sh` creates two clients from the template with path inputs, runs `nixant up` for both in parallel, `wp-site check`, checks that core and `wp-config.php` are on the host owned by the host user, isolation between the clients, a live host edit of a plugin, that a second `nixant up` is a no-op, and destroys both. Instances are named `nixwp-it-*` and always cleaned up.
 
 ## Milestones

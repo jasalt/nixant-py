@@ -5,7 +5,7 @@
 
   nixant = {
     # A unique name per client: it names the Incus instance.
-    instanceName = "client-dev";
+    instanceName = "nixant-template-dev";
     # Must equal the host user's `id -u` so the workspace mount is writable.
     user.uid = 1000;
     ports = [

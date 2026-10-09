@@ -38,7 +38,7 @@ A `path:` build has no git revision, so the generated project points at that bui
 
 ## Project setup
 
-Run `nixant init` in an empty project directory (`nixant init --list` shows the `default`, `node`, `python` and `devenv` templates). It writes `flake.nix` and `nix/dev.nix` (the `devenv` template also a starter `devenv.nix`, `devenv.yaml` and `.gitignore`), proposes `nixant.instanceName = "<dir>-dev"` (sanitized for Incus, with a warning if that instance already exists), locks the inputs, and stages the files in git when the directory is a work tree. If the lock step fails (for example offline), the files are kept and the exact `nix flake lock` command is printed.
+Run `nixant init` in an empty project directory (`nixant init --list` shows the `default`, `node`, `python`, `devenv` and `wordpress` templates). It writes `flake.nix` and `nix/dev.nix` (the `devenv` template also a starter `devenv.nix`, `devenv.yaml` and `.gitignore`; the `wordpress` template `nix/site.nix` and `.gitignore` instead of `nix/dev.nix`), proposes `nixant.instanceName = "<dir>-dev"` (sanitized for Incus, with a warning if that instance already exists), locks the inputs, and stages the files in git when the directory is a work tree. If the lock step fails (for example offline), the files are kept and the exact `nix flake lock` command is printed.
 
 The generated `nixant` input is `github:jasalt/nixant-py`, and the lock is pinned to the revision the CLI was built from, so project and CLI match. This applies to builds from a clean checkout, such as `nix run github:jasalt/nixant-py`. Dirty-tree builds and the `nix develop` shell have no revision to pin, so they point the input at their own source as a `path:` URL instead; that project only evaluates on this machine, and `init` warns about it. On such builds, setting `NIXANT_FLAKE_URL` (and `NIXANT_REV`) overrides the URL (a clean build always uses its own); `github:`, `gitlab:`, `sourcehut:` and `git+*://` URLs are supported, and anything else is rejected before files are written.
 
@@ -65,11 +65,12 @@ Everything else is ordinary NixOS and home-manager configuration, attached to `u
 
 ## Extension modules
 
-Other NixOS modules can build on nixant, for example a module that sets up a web stack and reads the project's user and forwarded ports. The flake exports four modules:
+Other NixOS modules can build on nixant, for example a module that sets up a web stack and reads the project's user and forwarded ports. The flake exports these modules:
 
 - `nixosModules.container` and `nixosModules.vm` are what a project imports; each pulls in the options and creates the guest user.
 - `nixosModules.options` declares only the `nixant.*` options and their rules, without the guest user, boot or Incus settings. Use it to evaluate or test an extension module without an Incus guest; the test then has to define the `users.users` entry for `nixant.user.name` itself.
 - `nixosModules.devenv` adds [devenv](https://devenv.sh) and git to the guest and configures the devenv binary cache in the guest's Nix daemon, so it also applies under `isolation = "agent"`, where the user is not a trusted Nix user. Import it next to `nixosModules.container`. devenv then builds each project's environment inside the guest, with its own `devenv.lock`; nixant does not start devenv processes. `nixant init devenv` starts a project with it, and [`examples/devenv-wordpress`](examples/devenv-wordpress/README.md) runs a WordPress stack this way.
+- `nixosModules.wordpress` is the WordPress extension, see below.
 
 Extension modules may read these options. The container and VM modules set `nixant.enable = true`; with the options module alone, set it yourself, otherwise the workspace mount default does not exist:
 
@@ -83,7 +84,7 @@ Extension modules may read these options. The container and VM modules set `nixa
 
 `nixant.runtime` is internal (the JSON the CLI consumes) and read-only; extension modules should not read or set it. To check that nixant is present, test `options ? nixant` in the module arguments, and read `config.nixant` only behind that.
 
-[nixant-wp](https://github.com/jasalt/nixant-wp) is such an extension, in its own repository: a WordPress module and template that runs MariaDB, PHP-FPM, Caddy and Mailpit as native NixOS services, built on the host and set up by `nixant up`, with the whole site in a project directory shared with the guest. [nixant-wp-demo](https://github.com/jasalt/nixant-wp-demo) is a complete site built with it. Neither uses devenv; they are separate from `nixosModules.devenv` and [`examples/devenv-wordpress`](examples/devenv-wordpress/README.md), which only demonstrates the devenv layer with a WordPress stack.
+[`extensions/wordpress`](extensions/wordpress/README.md) is such an extension, kept in its own directory and exported by this flake as `nixosModules.wordpress` and `templates.wordpress` (`nixant init wordpress`): a WordPress module and template that runs MariaDB, PHP-FPM, Caddy and Mailpit as native NixOS services, built on the host and set up by `nixant up`, with the whole site in a project directory shared with the guest. [nixant-wp-demo](https://github.com/jasalt/nixant-wp-demo) is a complete site built with it. Neither uses devenv; they are separate from `nixosModules.devenv` and [`examples/devenv-wordpress`](examples/devenv-wordpress/README.md), which only demonstrates the devenv layer with a WordPress stack.
 
 ## Workflow
 
@@ -195,7 +196,7 @@ $ ruff check . && ruff format --check . && mypy && pytest
 $ nix flake check
 ```
 
-`nix flake check` evaluates every template, `examples/basic` and `examples/devenv-wordpress` through their own `flake.nix` down to the system derivation. The examples are evaluated with the inputs from their committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh them with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` in each example directory. The devenv side of `examples/devenv-wordpress` (`devenv.nix`) is not checked; it is built in the guest.
+`nix flake check` evaluates every template, `examples/basic` and `examples/devenv-wordpress` through their own `flake.nix` down to the system derivation. The examples are evaluated with the inputs from their committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh them with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` in each example directory. The devenv side of `examples/devenv-wordpress` (`devenv.nix`) is not checked; it is built in the guest. It also runs the WordPress extension's evaluation tests; its VM and Incus tests are opt-in, see [its README](extensions/wordpress/README.md#tests).
 
 Integration tests need a disposable Incus environment. Plain `pytest` only collects `tests/unit`, so name the directory and opt in explicitly:
 
