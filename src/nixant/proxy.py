@@ -74,8 +74,18 @@ def command_routes(argv: list[str]) -> dict[str, int]:
     return data
 
 
+def listen_addresses(port: int, https_port: int | None) -> list[str]:
+    ports = [port] if https_port is None else [port, https_port]
+    return [f"{host}:{p}" for p in ports for host in ("127.0.0.1", "[::1]")]
+
+
 def caddy_config(
-    routes: Mapping[str, int], admin_socket: Path, listen: list[str]
+    routes: Mapping[str, int],
+    admin_socket: Path,
+    listen: list[str],
+    *,
+    http_port: int = 80,
+    https_port: int | None = None,
 ) -> dict[str, Any]:
     handlers: list[dict[str, Any]] = [
         {
@@ -91,20 +101,29 @@ def caddy_config(
     ]
     # Anything else, including a rebinding attacker's name, reaches no instance.
     handlers.append({"handle": [{"handler": "static_response", "status_code": 404}]})
-    return {
-        "admin": {"listen": f"unix/{admin_socket}"},
-        "apps": {
-            "http": {
-                "servers": {
-                    "nixant": {
-                        "listen": listen,
-                        "routes": handlers,
-                        "automatic_https": {"disable": True},
-                    }
-                }
-            }
-        },
+    server: dict[str, Any] = {"listen": listen, "routes": handlers}
+    apps: dict[str, Any] = {
+        "http": {
+            "http_port": http_port,
+            "https_port": https_port or 443,
+            "servers": {"nixant": server},
+        }
     }
+    if https_port is None:
+        server["automatic_https"] = {"disable": True}
+    elif routes:
+        # Caddy's own CA, not ACME: these names only exist on this machine.
+        apps["tls"] = {
+            "automation": {
+                "policies": [
+                    {
+                        "subjects": sorted(routes),
+                        "issuers": [{"module": "internal"}],
+                    }
+                ]
+            }
+        }
+    return {"admin": {"listen": f"unix/{admin_socket}"}, "apps": apps}
 
 
 class _UnixConnection(http.client.HTTPConnection):
@@ -143,7 +162,18 @@ def runtime_dir() -> Path:
     return Path(base)
 
 
-def setup_help(port: int) -> str:
+def setup_help(port: int, https_port: int | None = None) -> str:
+    https = (
+        f"""
+HTTPS uses Caddy's own certificate authority. Trust it once, so browsers accept
+https://<name>.localhost (this installs the CA into your trust store):
+  caddy trust
+Port {https_port} needs the same permission as port {port}.
+"""
+        if https_port is not None
+        else ""
+    )
+    https_flag = "" if https_port is None else f" --https --https-port {https_port}"
     return f"""\
 Listening on port {port} needs one host change; nixant never makes it for you.
 
@@ -156,25 +186,31 @@ Or run the proxy as a system service that may bind low ports only itself:
   [Service]
   User={os.environ.get("USER", "YOU")}
   Environment=XDG_RUNTIME_DIR=/run/user/{os.getuid()}
-  ExecStart={shutil.which("nixant") or "nixant"} proxy --port {port}
+  ExecStart={shutil.which("nixant") or "nixant"} proxy --port {port}{https_flag}
   AmbientCapabilities=CAP_NET_BIND_SERVICE
   Restart=on-failure
   [Install]
   WantedBy=multi-user.target
-"""
+{https}"""
 
 
 def serve(
-    routes: Callable[[], dict[str, int]], *, port: int = 80, watch_incus: bool = True
+    routes: Callable[[], dict[str, int]],
+    *,
+    port: int = 80,
+    https_port: int | None = None,
+    watch_incus: bool = True,
 ) -> None:
     caddy = shutil.which("caddy")
     if caddy is None:
         raise NixantError("caddy not found on PATH; install it or use nix shell")
     admin = runtime_dir() / "nixant-caddy.sock"
-    listen = [f"127.0.0.1:{port}", f"[::1]:{port}"]
+    listen = listen_addresses(port, https_port)
 
     def current() -> dict[str, Any]:
-        return caddy_config(routes(), admin, listen)
+        return caddy_config(
+            routes(), admin, listen, http_port=port, https_port=https_port
+        )
 
     admin.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="nixant-proxy-") as scratch:

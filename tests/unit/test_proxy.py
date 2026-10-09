@@ -10,7 +10,12 @@ from nixant.cli import app
 from nixant.errors import NixantError
 from nixant.models import MachineState
 from nixant.ownership import PREFIX
-from nixant.proxy import caddy_config, collect_routes, command_routes
+from nixant.proxy import (
+    caddy_config,
+    collect_routes,
+    command_routes,
+    listen_addresses,
+)
 
 
 def _state(name: str, routes: object, status: str = "Running") -> MachineState:
@@ -102,3 +107,34 @@ def test_proxy_routes_prints_json(monkeypatch: pytest.MonkeyPatch) -> None:
 def _no_host_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     # The build sandbox has neither incus nor nix on PATH.
     monkeypatch.setattr("nixant.cli.check_host_tools", lambda: None)
+
+
+def test_https_config_uses_the_internal_ca_on_loopback() -> None:
+    listen = listen_addresses(80, 443)
+    assert listen == ["127.0.0.1:80", "[::1]:80", "127.0.0.1:443", "[::1]:443"]
+    config = caddy_config(
+        {"b.localhost": 2, "a.localhost": 1},
+        Path("/s.sock"),
+        listen,
+        https_port=443,
+    )
+    server = config["apps"]["http"]["servers"]["nixant"]
+    assert "automatic_https" not in server
+    policy = config["apps"]["tls"]["automation"]["policies"][0]
+    assert policy == {
+        "subjects": ["a.localhost", "b.localhost"],
+        "issuers": [{"module": "internal"}],
+    }
+
+
+def test_http_only_config_has_no_tls() -> None:
+    config = caddy_config({"a.localhost": 1}, Path("/s.sock"), ["127.0.0.1:80"])
+    assert "tls" not in config["apps"]
+    server = config["apps"]["http"]["servers"]["nixant"]
+    assert server["automatic_https"] == {"disable": True}
+
+
+def test_proxy_print_setup_mentions_trusting_the_ca() -> None:
+    result = CliRunner().invoke(app, ["proxy", "--print-setup", "--https"])
+    assert "caddy trust" in result.output
+    assert "--https --https-port 443" in result.output

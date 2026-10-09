@@ -365,6 +365,10 @@ def _confirm_destroy(name: str) -> None:
 def proxy(
     ctx: typer.Context,
     port: int = typer.Option(80, "--port", help="Loopback port to serve on."),
+    https: bool = typer.Option(
+        False, "--https", help="Also serve HTTPS with Caddy's internal CA."
+    ),
+    https_port: int = typer.Option(443, "--https-port", help="Port for --https."),
     print_setup: bool = typer.Option(
         False, "--print-setup", help="Show how to allow binding the port, then exit."
     ),
@@ -385,7 +389,7 @@ def proxy(
     Incus. It changes nothing on the host; --print-setup explains port 80.
     """
     if print_setup:
-        typer.echo(setup_help(port))
+        typer.echo(setup_help(port, https_port if https else None))
         return
     provider = IncusProvider(ctx.obj["runner"])
     if routes:
@@ -393,9 +397,18 @@ def proxy(
         return
     if routes_from is not None:
         argv = shlex.split(routes_from)
-        serve(lambda: command_routes(argv), port=port, watch_incus=False)
+        serve(
+            lambda: command_routes(argv),
+            port=port,
+            https_port=https_port if https else None,
+            watch_incus=False,
+        )
         return
-    serve(lambda: local_routes(provider), port=port)
+    serve(
+        lambda: local_routes(provider),
+        port=port,
+        https_port=https_port if https else None,
+    )
 
 
 @app.command()
