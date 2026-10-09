@@ -100,7 +100,7 @@ $ nixant status          # metadata and cached build state, no evaluation
 $ nixant config          # runtime JSON, project ID, instance name, mount sources
 $ nixant restart         # restart (or start) without re-activating
 $ nixant down [--force]  # stop
-$ nixant destroy         # delete the instance and its host GC root
+$ nixant destroy         # delete the instance and its host GC root (asks first; -y skips, and is required without a terminal)
 $ nixant snapshot [NAME]  # snapshot (also: snapshots, restore NAME, snapshot NAME --delete)
 $ nixant name [NAME]     # give this checkout its own instance name (git config)
 $ nixant adopt           # attach an instance whose checkout moved

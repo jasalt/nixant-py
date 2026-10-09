@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -310,7 +311,11 @@ def _remove_gcroot(root: Path, target: str) -> None:
 
 
 @app.command()
-def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
+def destroy(
+    ctx: typer.Context,
+    target: str = typer.Argument("dev"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
+) -> None:
     """Delete an owned environment and its disposable host GC root."""
     root = discover_project()
     provider = IncusProvider(ctx.obj["runner"])
@@ -319,9 +324,26 @@ def destroy(ctx: typer.Context, target: str = typer.Argument("dev")) -> None:
         if state is None:
             typer.echo(f"{target}: not created")
         else:
+            if not yes:
+                _confirm_destroy(state.name)
             provider.destroy(state.name)
             typer.echo(f"{state.name}: destroyed")
         _remove_gcroot(root, target)
+
+
+def _interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _confirm_destroy(name: str) -> None:
+    if not _interactive():
+        raise UsageError(f"destroying {name} needs confirmation; pass --yes")
+    typer.echo(
+        f"This deletes {name}, its snapshots and everything stored only in the "
+        "guest (databases, files outside the mounts). Mounted project files stay."
+    )
+    if not typer.confirm("Destroy it?", default=False):
+        raise typer.Abort()
 
 
 @app.command()

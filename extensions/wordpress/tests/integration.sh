@@ -34,7 +34,7 @@ cleanup() {
   trap - EXIT
   for client in "${clients[@]}"; do
     if [ -d "$work/$client" ]; then
-      (cd "$work/$client" && "$nixant" destroy "dev" >/dev/null 2>&1) || true
+      (cd "$work/$client" && "$nixant" destroy --yes "dev" >/dev/null 2>&1) || true
     fi
   done
   # Anything left over by an interrupted nixant run.
@@ -127,7 +127,7 @@ ncli a up >"$work/a.up2.log" 2>&1 || { cat "$work/a.up2.log" >&2; fail "second n
 [ "$(invocation)" = "$before" ] || fail "second nixant up reran wordpress-setup"
 
 step "destroy"
-for client in "${clients[@]}"; do ncli "$client" destroy "dev" >/dev/null; done
+for client in "${clients[@]}"; do ncli "$client" destroy --yes "dev" >/dev/null; done
 if incus list -c n --format csv | grep -q "^$prefix-"; then
   fail "instances left behind"
 fi

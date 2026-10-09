@@ -58,7 +58,7 @@ def test_happy_path(project: Project) -> None:
     assert "RUNNING" in status.upper()
     assert "current" in status
 
-    project.nixant("destroy")
+    project.nixant("destroy", "--yes")
     assert not project.instance_exists()
 
 
@@ -267,7 +267,7 @@ def test_broken_config_does_not_block_cleanup(project: Project) -> None:
     assert "RUNNING" in project.nixant("status").stdout.upper()
     project.nixant("down")
     assert "STOPPED" in project.nixant("status").stdout.upper()
-    project.nixant("destroy")
+    project.nixant("destroy", "--yes")
     assert not project.instance_exists()
 
 
@@ -278,7 +278,7 @@ def test_syntax_error_creates_nothing(project: Project) -> None:
     assert result.returncode != 0
     assert not project.instance_exists()
     # Cleanup commands never evaluate, so a broken configuration cannot block them.
-    assert project.nixant("destroy", check=False).returncode == 0
+    assert project.nixant("destroy", "--yes", check=False).returncode == 0
 
 
 def test_cross_target_same_instance_name(tmp_path: Path) -> None:
@@ -292,7 +292,7 @@ def test_cross_target_same_instance_name(tmp_path: Path) -> None:
         assert clash.returncode != 0
         assert "belongs to target dev" in clash.stderr
         # The second target never touches the first target's instance.
-        project.nixant("destroy", "other")
+        project.nixant("destroy", "--yes", "other")
         assert project.instance_exists()
         assert project.incus_config("user.nixant.target") == "dev"
     finally:
@@ -319,7 +319,7 @@ def test_cross_target_distinct_names_coexist(tmp_path: Path) -> None:
 
         project.nixant("down", "other")
         assert "RUNNING" in project.nixant("status", "dev").stdout.upper()
-        project.nixant("destroy", "other")
+        project.nixant("destroy", "--yes", "other")
         assert not project.instance_exists(other)
         assert project.exec("true").returncode == 0
     finally:
@@ -431,7 +431,7 @@ def test_adopt_after_checkout_moves(project: Project, tmp_path: Path) -> None:
     assert project.instance not in new.nixant("status", "--orphans").stdout
     new.nixant("rebuild")
     assert new.incus_config("user.nixant.root") == str(moved.resolve())
-    new.nixant("destroy")
+    new.nixant("destroy", "--yes")
 
 
 def test_name_override_gives_second_checkout_its_own_instance(
@@ -456,7 +456,7 @@ def test_name_override_gives_second_checkout_its_own_instance(
     second.nixant("up")
     assert second.instance_exists(chosen)
     assert project.instance_exists()
-    second.nixant("destroy")
+    second.nixant("destroy", "--yes")
     assert not second.instance_exists(chosen)
     assert project.instance_exists()
 
@@ -523,7 +523,7 @@ def test_vm_mount_hotplug_and_adopt(tmp_path: Path) -> None:
         assert new.exec("cat", "/data/hello").stdout == "hi"
         # Hot-plug and the adopted retarget never rebooted the VM.
         assert new.exec("cat", "/proc/sys/kernel/random/boot_id").stdout == boot
-        new.nixant("destroy")
+        new.nixant("destroy", "--yes")
     finally:
         cleanup(project)
 
@@ -562,7 +562,7 @@ def test_vm_lifecycle_and_settings(vm_project: Project) -> None:
     assert "NAT" in refused.stderr + refused.stdout
 
     project.nixant("down")
-    project.nixant("destroy")
+    project.nixant("destroy", "--yes")
     assert not project.instance_exists()
 
 

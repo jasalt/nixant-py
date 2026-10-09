@@ -68,7 +68,7 @@ def test_destroy_gcroot(cleanup: tuple, exists: bool) -> None:
     link = gcroot_path(root, "dev")
     link.parent.mkdir(parents=True)
     link.symlink_to("/nonexistent/store-path")
-    result = CliRunner().invoke(app, ["destroy"])
+    result = CliRunner().invoke(app, ["destroy", "--yes"])
     assert result.exit_code == 0, result.output
     assert provider.destroy.called == exists
     assert not link.is_symlink()
@@ -149,3 +149,32 @@ def test_down_deletes_gcroot_of_ephemeral_instance(cleanup: tuple) -> None:
     assert result.exit_code == 0, result.output
     assert "deleted (ephemeral)" in result.output
     assert not link.is_symlink()
+
+
+def test_destroy_asks_and_aborts_on_no(
+    cleanup: tuple, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, provider, _ = cleanup
+    monkeypatch.setattr("nixant.cli._interactive", lambda: True)
+    result = CliRunner().invoke(app, ["destroy"], input="n\n")
+    assert result.exit_code != 0
+    assert "snapshots" in result.output
+    provider.destroy.assert_not_called()
+
+
+def test_destroy_confirmed_interactively(
+    cleanup: tuple, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, provider, _ = cleanup
+    monkeypatch.setattr("nixant.cli._interactive", lambda: True)
+    result = CliRunner().invoke(app, ["destroy"], input="y\n")
+    assert result.exit_code == 0, result.output
+    provider.destroy.assert_called_once()
+
+
+def test_destroy_without_a_terminal_requires_yes(cleanup: tuple) -> None:
+    _, provider, _ = cleanup
+    result = CliRunner().invoke(app, ["destroy"])
+    assert result.exit_code != 0
+    assert "--yes" in result.output
+    provider.destroy.assert_not_called()

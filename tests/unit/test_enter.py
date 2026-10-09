@@ -189,7 +189,14 @@ def test_schema_mismatch_blocks_commands_that_use_the_guest(
 
 @pytest.mark.parametrize(
     "arguments",
-    [["status"], ["down"], ["destroy"], ["snapshots"], ["snapshot", "s1"], ["restart"]],
+    [
+        ["status"],
+        ["down"],
+        ["destroy", "--yes"],
+        ["snapshots"],
+        ["snapshot", "s1"],
+        ["restart"],
+    ],
 )
 def test_schema_mismatch_never_blocks_inspection_or_cleanup(
     mismatched: Mock, arguments: list[str]
