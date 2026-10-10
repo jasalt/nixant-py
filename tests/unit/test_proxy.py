@@ -15,6 +15,7 @@ from nixant.proxy import (
     collect_routes,
     command_routes,
     listen_addresses,
+    serve,
 )
 
 
@@ -132,6 +133,42 @@ def test_http_only_config_has_no_tls() -> None:
     assert "tls" not in config["apps"]
     server = config["apps"]["http"]["servers"]["nixant"]
     assert server["automatic_https"] == {"disable": True}
+
+
+@pytest.mark.parametrize(
+    ("port", "https_port", "url"),
+    [
+        (80, None, "http://a.localhost"),
+        (8080, None, "http://a.localhost:8080"),
+        (80, 443, "https://a.localhost"),
+        (8080, 8443, "https://a.localhost:8443"),
+    ],
+)
+def test_serve_logs_clickable_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    port: int,
+    https_port: int | None,
+    url: str,
+) -> None:
+    monkeypatch.setattr("nixant.proxy.shutil.which", lambda name: "/bin/caddy")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    process = Mock()
+    process.poll.return_value = 0
+    monkeypatch.setattr("nixant.proxy.subprocess.Popen", Mock(return_value=process))
+    monkeypatch.setattr("nixant.proxy._watch", Mock())
+
+    serve(
+        lambda: {"a.localhost": 8001},
+        port=port,
+        https_port=https_port,
+        watch_incus=False,
+    )
+
+    assert capsys.readouterr().err == (
+        f"nixant proxy: routes: {url} -> http://127.0.0.1:8001\n"
+    )
 
 
 def test_proxy_print_setup_mentions_trusting_the_ca() -> None:

@@ -8,7 +8,7 @@ from fake_incus import FakeIncus
 from typer.testing import CliRunner
 
 from nixant.cli import app, parse_duration
-from nixant.deploy import wayland_socket
+from nixant.deploy import _diff_system, wayland_socket
 from nixant.errors import NixantError, UsageError
 from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
@@ -509,13 +509,16 @@ def test_up_prints_new_and_existing_routes(
         original, spec=replace(original.spec, ports=ports[:1])
     )
     first = CliRunner().invoke(app, ["up"])
-    assert "route laive.localhost -> 127.0.0.1:8105 (new)" in first.output
+    assert "route http://laive.localhost -> http://127.0.0.1:8105 (new)" in first.output
     deploy["evaluate"].return_value = replace(
         original, spec=replace(original.spec, ports=ports)
     )
     second = CliRunner().invoke(app, ["up"])
-    assert "route laive.localhost -> 127.0.0.1:8105\n" in second.output
-    assert "route mail.laive.localhost -> 127.0.0.1:9105 (new)" in second.output
+    assert "route http://laive.localhost -> http://127.0.0.1:8105\n" in second.output
+    assert (
+        "route http://mail.laive.localhost -> http://127.0.0.1:9105 (new)"
+        in second.output
+    )
     assert "nixant proxy" in second.output
 
 
@@ -656,3 +659,61 @@ def test_up_warns_when_wayland_has_no_session(
     assert result.exit_code == 0, result.output
     assert "wayland: add nixant-wayland" in result.output
     assert "WAYLAND_DISPLAY is not set" in result.output
+
+
+def test_dry_run_new_instance_changes_nothing(deploy: dict[str, Mock]) -> None:
+    result = CliRunner().invoke(app, ["up", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would create container test-dev" in result.output
+    assert "mounts: add nixant-mount-workspace" in result.output
+    assert "no previous system on this host" in result.output
+    assert "dry run: nothing was changed" in result.output
+    assert deploy["build"].call_args.kwargs == {"root_it": False}
+    provider = deploy["provider"]
+    provider.create.assert_not_called()
+    provider.apply.assert_not_called()
+    provider.start.assert_not_called()
+    deploy["activate"].assert_not_called()
+
+
+def test_dry_run_existing_instance(deploy: dict[str, Mock]) -> None:
+    state = MachineState(
+        "test-dev",
+        "Stopped",
+        "container",
+        {PREFIX + "system": "system"},
+        {},
+    )
+    deploy["resolve"].return_value = state
+    result = CliRunner().invoke(app, ["up", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would create" not in result.output
+    assert "would start test-dev" in result.output
+    assert "system: unchanged (system)" in result.output
+    deploy["provider"].apply.assert_not_called()
+    deploy["provider"].start.assert_not_called()
+
+
+def test_dry_run_reports_refused_changes(deploy: dict[str, Mock]) -> None:
+    deploy["resolve"].return_value = MachineState(
+        "test-dev", "Running", "container", {}, {}, ephemeral=True
+    )
+    result = CliRunner().invoke(app, ["up", "--dry-run"])
+    assert result.exit_code == 1
+    assert "ephemeral: instance is ephemeral" in result.output
+    assert "(refused)" in result.output
+    assert "up would refuse" in result.output
+    deploy["provider"].apply.assert_not_called()
+
+
+def test_diff_system_compares_closures(tmp_path: Path) -> None:
+    old = tmp_path / "old-system"
+    old.mkdir()
+    runner = Mock()
+    state = MachineState(
+        "dev", "Running", "container", {PREFIX + "system": str(old)}, {}
+    )
+    _diff_system(runner, state, "/nix/store/new")
+    runner.run.assert_called_once_with(
+        ["nix", "store", "diff-closures", str(old), "/nix/store/new"]
+    )

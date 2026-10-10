@@ -176,9 +176,15 @@ def up(
     timeout: str | None = typer.Option(
         None, help="Activation deadline, e.g. 5m (default 30m)."
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Build, then show the instance changes and package diff "
+        "without applying them.",
+    ),
 ) -> None:
     """Build, start and activate the target environment."""
-    _deploy(ctx, target, timeout, deploy.up)
+    _deploy(ctx, target, timeout, deploy.dry_run if dry_run else deploy.up)
 
 
 @app.command()

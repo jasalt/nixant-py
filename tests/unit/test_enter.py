@@ -186,7 +186,7 @@ def test_enter_offers_to_start_a_stopped_instance(
     assert "Starting the system container instance owned-dev\n" in result.output
     assert "owned-dev ready (dev) 10.0.0.5; nixant shell dev\n" in result.output
     assert "port 127.0.0.1:8105 -> guest 80\n" in result.output
-    assert "route site.localhost -> 127.0.0.1:8105\n" in result.output
+    assert "route http://site.localhost -> http://127.0.0.1:8105\n" in result.output
     assert "served by `nixant proxy` on the host" in result.output
     start.assert_called_once_with("owned-dev")
     assert ready.call_args.args[1:] == ("owned-dev", "container")

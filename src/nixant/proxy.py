@@ -219,7 +219,14 @@ def serve(
 
     def current() -> dict[str, Any]:
         table = routes()
-        shown = ", ".join(f"{name} -> {p}" for name, p in sorted(table.items()))
+        scheme = "http" if https_port is None else "https"
+        route_port = port if https_port is None else https_port
+        default_port = 80 if https_port is None else 443
+        suffix = "" if route_port == default_port else f":{route_port}"
+        shown = ", ".join(
+            f"{scheme}://{name}{suffix} -> http://127.0.0.1:{p}"
+            for name, p in sorted(table.items())
+        )
         print(f"nixant proxy: routes: {shown or 'none'}", file=sys.stderr, flush=True)
         return caddy_config(table, admin, listen, http_port=port, https_port=https_port)
 

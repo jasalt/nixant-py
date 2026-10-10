@@ -14,18 +14,23 @@ def gcroot_path(root: Path, target: str) -> Path:
     return state_directory() / "gcroots" / f"{project_id(root)}-{target}"
 
 
-def build(root: Path, target: str, drv_path: str, runner: Runner) -> str:
+def build(
+    root: Path, target: str, drv_path: str, runner: Runner, *, root_it: bool = True
+) -> str:
+    """Without root_it the GC root keeps naming the last deployed system."""
     if not is_drv_path(drv_path):
         raise NixantError("invalid system derivation path")
     link = gcroot_path(root, target)
-    try:
-        link.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise NixantError(
-            f"cannot create GC root directory {link.parent}: {exc}"
-        ) from exc
+    if root_it:
+        try:
+            link.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise NixantError(
+                f"cannot create GC root directory {link.parent}: {exc}"
+            ) from exc
+    out = ["--out-link", str(link)] if root_it else ["--no-link"]
     result = runner.run(
-        ["nix", "build", f"{drv_path}^out", "--out-link", str(link), "--json"],
+        ["nix", "build", f"{drv_path}^out", *out, "--json"],
         cwd=root,
         capture=True,
     )

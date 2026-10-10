@@ -60,6 +60,47 @@ def up(
     _report(provider, spec, target, _recorded_routes(current))
 
 
+def dry_run(
+    provider: IncusProvider, runner: Runner, root: Path, target: str, timeout: float
+) -> None:
+    """What up would do: Incus changes and the package diff, applying nothing."""
+    desired = _desired(root, target, runner)
+    spec = desired.spec
+    session = host()
+    _refuse(validate(spec, session), "cannot apply configuration")
+    system = build(root, target, desired.drv_path, runner, root_it=False)
+    current = _resolve(provider, root, target, desired)
+    if current is None:
+        typer.echo(f"would create {spec.kind} {spec.instance_name}")
+        state = MachineState(spec.instance_name, "Stopped", spec.kind, {}, {})
+    else:
+        state = current
+    changes = plan(spec, state, session)
+    notes = {
+        Effect.RESTART: " (after the next restart)",
+        Effect.RECREATE: " (refused)",
+        Effect.UNSUPPORTED: " (refused)",
+    }
+    for change in changes:
+        typer.echo(f"{change.setting}: {change.summary}{notes.get(change.effect, '')}")
+    if current is not None and current.status != "Running":
+        typer.echo(f"would start {spec.instance_name}")
+    _diff_system(runner, current, system)
+    _refuse(changes, "up would refuse")
+    typer.echo("dry run: nothing was changed")
+
+
+def _diff_system(runner: Runner, state: MachineState | None, system: str) -> None:
+    old = state.config.get(PREFIX + "system") if state else None
+    if old == system:
+        typer.echo(f"system: unchanged ({system})")
+    elif old and Path(old).exists():
+        typer.echo(f"system: {old} -> {system}")
+        runner.run(["nix", "store", "diff-closures", old, system])
+    else:
+        typer.echo(f"system: {system} (no previous system on this host to compare)")
+
+
 def rebuild(
     provider: IncusProvider, runner: Runner, root: Path, target: str, timeout: float
 ) -> None:
@@ -282,6 +323,6 @@ def report(
         typer.echo(f"port {listen} -> guest {guest}")
     for hostname, port in routes.items():
         mark = "" if before.get(hostname) == port else " (new)"
-        typer.echo(f"route {hostname} -> 127.0.0.1:{port}{mark}")
+        typer.echo(f"route http://{hostname} -> http://127.0.0.1:{port}{mark}")
     if routes:
         typer.echo("served by `nixant proxy` on the host")

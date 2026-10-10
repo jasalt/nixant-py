@@ -131,6 +131,23 @@ def test_build_by_derivation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     )
 
 
+def test_unrooted_build_leaves_the_gc_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    runner = Mock(spec=Runner)
+    runner.run.return_value = subprocess.CompletedProcess(
+        [], 0, json.dumps([{"outputs": {"out": SYSTEM}}]).encode()
+    )
+    assert build(tmp_path, "dev", DRV, runner, root_it=False) == SYSTEM
+    assert not gcroot_path(tmp_path, "dev").parent.exists()
+    runner.run.assert_called_once_with(
+        ["nix", "build", DRV + "^out", "--no-link", "--json"],
+        cwd=tmp_path,
+        capture=True,
+    )
+
+
 def test_invalid_drv_no_build(tmp_path: Path) -> None:
     runner = Mock(spec=Runner)
     with pytest.raises(NixantError, match="invalid system derivation"):

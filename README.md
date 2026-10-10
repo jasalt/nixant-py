@@ -93,6 +93,7 @@ Extension modules may read these options. The container and VM modules set `nixa
 ```console
 $ nixant init            # create flake.nix from the default template
 $ nixant up              # build, create/start, transfer, activate (target "dev")
+$ nixant up --dry-run    # build, then show instance changes and the package diff; apply nothing
 $ nixant shell           # login shell in the guest, in the matching directory (alias: ssh)
 $ nixant exec -- make    # run one command
 $ nixant rebuild         # re-build and always re-activate a running instance (alias: reload)
@@ -109,6 +110,7 @@ $ nixant adopt           # attach an instance whose checkout moved
 Every command takes an optional target name (default `dev`). Without one, `shell`, `exec` (`-n TARGET`), `up`, `rebuild`, `down`, `restart`, `destroy`, `config`, `snapshot`, `snapshots` and `restore` (`-t TARGET`) use the target whose mount source contains the current directory, the deepest one if mounts nest, so `nixant shell` inside `www/site` enters the instance that mounts `www/site`; they fall back to `dev` outside every mount or when several targets mount the same directory. `up` and `rebuild` find the instance the same way, so the first `up` of a site still needs its name. `shell` and `exec` start where the current directory appears in the guest, `/workspace/public_html` from `www/site/public_html`, and in the target's workdir when the current directory is outside its mounts. When the instance is stopped or frozen, `shell` and `exec` ask on a terminal whether to start it (without re-activating, like `restart`); without a terminal they fail and point to `nixant restart`. This reads the instances' Incus mount devices and does not evaluate Nix. `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation (default 30 minutes).
 
 - `up` and `rebuild` are the only commands that evaluate Nix. `shell`, `exec`, `down`, `destroy` and `status` find the instance by its `user.nixant.*` Incus metadata, so a broken or removed configuration never blocks cleanup.
+- `up --dry-run` evaluates and builds, then prints the instance changes `up` would make (or what a new instance would get) and the package diff against the system recorded on the instance (`nix store diff-closures`). It creates, starts, changes and activates nothing, and leaves the host GC root at the deployed system. It exits non-zero when `up` would refuse.
 - `up` skips activation when the instance already runs the built system. `rebuild` never skips, so it is the explicit retry after a failed or degraded activation.
 - `shell` and `exec` need a running instance with at least one completed activation (`ok` or `degraded`). They do not start the instance; run `nixant up` first.
 - `status` reports, per instance, the Incus state, IPv4 addresses, activation result, whether the recorded system is `current` or `outdated` against the host GC root, and any schema mismatch.
