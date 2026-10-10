@@ -142,6 +142,14 @@ in {
         server is never shared.
       '';
     };
+    gpu = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Share the host's first GPU render node (/dev/dri/renderD*) for
+        hardware rendering. Containers only.
+      '';
+    };
     runtime = mkOption {
       type = types.attrs;
       readOnly = true;
@@ -166,6 +174,7 @@ in {
       mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) mounts;
       ports = map (port: { inherit (port) host guest address hostname; }) cfg.ports;
       inherit (cfg) wayland;
+      gpu = if cfg.gpu then { gid = config.users.groups.render.gid; } else null;
       workdir = if cfg.workdir != null then cfg.workdir
         else if mounts ? workspace then mounts.workspace.target else user.home;
       user = {

@@ -154,22 +154,24 @@ Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy
 
 - The proxy looks the socket up on each new connection, so it keeps working after you log out and in again, as long as the compositor keeps the same socket name.
 - When `up` runs without `WAYLAND_DISPLAY` (for example over ssh), an existing device keeps the socket it recorded. A new one gets `/run/user/<uid>/wayland-0` and `up` prints a warning.
-- Apps render in software (shared memory, or llvmpipe for OpenGL). GPU passthrough is not set up.
 - Containers only. `up` refuses `wayland` on a VM, because Incus cannot proxy a Unix socket into one.
 - Audio is not forwarded. The same mechanism would work for it: a second proxy device for the host's `pipewire-0` or `pulse/native` socket, linked into the guest's runtime directory. Sharing it also gives the guest the microphone.
 
-One further setting is off by default:
+Two further settings are off by default:
 
 ```nix
 nixant = {
   wayland = true;
   x11 = true;   # X11-only apps, through xwayland-satellite in the guest
+  gpu = true;   # hardware rendering on the host's GPU
 };
 ```
 
 - `x11` runs [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) as a user service in the guest and sets `DISPLAY=:0`. X11 apps become ordinary Wayland windows, and the host's X server is never shared. It requires `wayland`. The service restarts until the compositor is reachable again, so it survives a restart of the host session. It adds Xwayland to the guest closure.
+- `gpu` shares the host's first render node (`/dev/dri/renderD*`) as a `nixant-gpu` device owned by the guest's `render` group, adds the user to that group, and enables `hardware.graphics`, so Mesa from the guest's nixpkgs drives the GPU. The display (`card`) nodes are not shared. Containers only; `up` refuses it before building when the host has no render node.
+- Without `gpu`, apps render in software (shared memory, or llvmpipe for OpenGL). That is fine for terminals and dialogs, but browsers, Electron apps and video playback then load the CPU.
 
-The socket gives guest code a connection to your desktop compositor; see [security.md](docs/security.md#7-the-wayland-socket-reaches-the-host-desktop).
+The socket and the render node both give guest code a path into the host; see [security.md](docs/security.md#7-the-wayland-socket-reaches-the-host-desktop) and [the GPU section](docs/security.md#8-a-shared-gpu-exposes-the-host-kernel-driver).
 
 ## Agent isolation
 
@@ -194,7 +196,7 @@ VM differences, verified on Incus with virtiofs mounts:
 - CPU and memory limits and mounts (add, retarget, remove) apply to a running VM.
 - A larger `disk` is stored immediately but the guest only sees it after `nixant restart`.
 - `ports` are rejected by `up` before anything is built or created: Incus only allows NAT-mode proxies on VMs, which need a static IPv4 address on the instance NIC that nixant does not manage.
-- `wayland` is rejected the same way: Incus proxies on VMs carry only TCP and UDP.
+- `wayland` and `gpu` are rejected the same way: Incus proxies on VMs carry only TCP and UDP, and a render node can only be shared with a container.
 
 ## `exec` environment caveats
 

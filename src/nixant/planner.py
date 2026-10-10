@@ -21,6 +21,7 @@ PORT_PREFIX = "nixant-port-"
 WAYLAND_DEVICE = "nixant-wayland"
 # /dev is the one guest directory that exists before the proxy starts.
 WAYLAND_LISTEN = "/dev/nixant-wayland-0"
+GPU_DEVICE = "nixant-gpu"
 
 _UNITS = {
     "": 1,
@@ -45,7 +46,18 @@ class Effect(Enum):
     UNSUPPORTED = "unsupported"
 
 
-DeviceKind = Literal["disk", "proxy"]
+DeviceKind = Literal["disk", "proxy", "unix-char"]
+
+
+@dataclass(frozen=True)
+class Host:
+    """What the calling host session offers the guest's desktop settings."""
+
+    wayland_socket: str | None = None
+    render_node: str | None = None
+
+
+NO_HOST = Host()
 
 
 @dataclass(frozen=True)
@@ -215,10 +227,7 @@ def _device_changes(
     return removals + updates + additions
 
 
-def plan(
-    spec: MachineSpec, state: MachineState, wayland_socket: str | None = None
-) -> list[Change]:
-    """``wayland_socket`` is the host compositor socket of the calling session."""
+def plan(spec: MachineSpec, state: MachineState, host: Host = NO_HOST) -> list[Change]:
     changes: list[Change] = []
     if state.kind != spec.kind:
         changes.append(
@@ -279,16 +288,18 @@ def plan(
             "path",
         )
     )
-    unsupported = validate(spec)
+    unsupported = validate(spec, host)
     changes.extend(unsupported)
     if not any(change.setting == "ports" for change in unsupported):
         changes.extend(_ports(spec, state))
     if not any(change.setting == "wayland" for change in unsupported):
-        changes.extend(_wayland(spec, state, wayland_socket))
+        changes.extend(_wayland(spec, state, host.wayland_socket))
+    if not any(change.setting == "gpu" for change in unsupported):
+        changes.extend(_gpu(spec, state, host.render_node))
     return changes
 
 
-def validate(spec: MachineSpec) -> list[Change]:
+def validate(spec: MachineSpec, host: Host = NO_HOST) -> list[Change]:
     """Settings no instance can take, known before one is inspected or created."""
     changes = []
     if spec.kind == "vm" and spec.ports:
@@ -307,6 +318,23 @@ def validate(spec: MachineSpec) -> list[Change]:
                 Effect.UNSUPPORTED,
                 "wayland is not supported on VMs: Incus cannot proxy a unix "
                 "socket into a VM",
+            )
+        )
+    if spec.kind == "vm" and spec.gpu_gid is not None:
+        changes.append(
+            Change(
+                "gpu",
+                Effect.UNSUPPORTED,
+                "gpu is not supported on VMs: a render node can only be shared "
+                "with a container",
+            )
+        )
+    elif spec.gpu_gid is not None and host.render_node is None:
+        changes.append(
+            Change(
+                "gpu",
+                Effect.UNSUPPORTED,
+                "gpu: the host has no render node (/dev/dri/renderD*)",
             )
         )
     return changes
@@ -361,6 +389,21 @@ def _wayland(
         Effect.LIVE,
         "wayland",
         "listen",
+    )
+
+
+def _gpu(spec: MachineSpec, state: MachineState, node: str | None) -> list[Change]:
+    """Only the render node: no display (card) node, so no modesetting."""
+    desired = {}
+    if spec.gpu_gid is not None and node is not None:  # validate() refused None
+        desired[GPU_DEVICE] = {
+            "source": node,
+            "path": node,
+            "gid": str(spec.gpu_gid),
+            "mode": "0660",
+        }
+    return _device_changes(
+        GPU_DEVICE, "unix-char", desired, state.devices, Effect.LIVE, "gpu", "path"
     )
 
 

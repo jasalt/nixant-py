@@ -31,6 +31,7 @@ let
     overflowUnit = rejects { nixant.memory = "9223372036854775807GiB"; };
     x11NeedsWayland = rejects { nixant.x11 = true; };
     x11WithWayland = succeeds (evaluate { nixant.wayland = true; nixant.x11 = true; });
+    gpuRenderGid = (evaluate { nixant.gpu = true; }).gpu == { gid = 303; };
     golden = base == builtins.fromJSON (builtins.readFile ./runtime.json);
     sizes = let runtime = evaluate { nixant.memory = "4GiB"; nixant.disk = 1000; };
       in runtime.memoryBytes == 4294967296 && runtime.diskBytes == 1000;

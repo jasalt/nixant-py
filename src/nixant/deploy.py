@@ -21,6 +21,7 @@ from nixant.planner import (
     WAYLAND_DEVICE,
     Change,
     Effect,
+    Host,
     SetRootSize,
     check_mount,
     plan,
@@ -46,7 +47,7 @@ def up(
     desired = _desired(root, target, runner)
     spec = desired.spec
     # Fail before building or creating anything the instance cannot take.
-    _refuse(validate(spec), "cannot apply configuration")
+    _refuse(validate(spec, host()), "cannot apply configuration")
     system = build(root, target, desired.drv_path, runner)
     current = _resolve(provider, root, target, desired)
     state = _converge(provider, root, target, spec, current)
@@ -70,7 +71,7 @@ def rebuild(
         raise NixantError(
             f"instance {spec.instance_name} is not running; run nixant up"
         )
-    outer = plan(spec, state, wayland_socket())
+    outer = plan(spec, state, host())
     if outer:
         fields = ", ".join(sorted({change.setting for change in outer}))
         typer.echo(
@@ -155,10 +156,14 @@ def _create(
 
 def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) -> None:
     """Store every change on the instance, or refuse the whole set up front."""
-    socket = wayland_socket()
-    changes = plan(spec, state, socket)
+    session = host()
+    changes = plan(spec, state, session)
     _refuse(changes, "cannot apply configuration to existing instance")
-    if spec.wayland and socket is None and WAYLAND_DEVICE not in state.devices:
+    if (
+        spec.wayland
+        and session.wayland_socket is None
+        and WAYLAND_DEVICE not in state.devices
+    ):
         typer.echo(
             f"warning: WAYLAND_DISPLAY is not set; the guest will use "
             f"/run/user/{spec.user.uid}/wayland-0 on the host. Run nixant up "
@@ -180,6 +185,16 @@ def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) 
                     f"run nixant restart",
                     err=True,
                 )
+
+
+def host() -> Host:
+    return Host(wayland_socket(), render_node())
+
+
+def render_node() -> str | None:
+    """The first GPU render node; Mesa in the guest picks the driver for it."""
+    nodes = sorted(Path("/dev/dri").glob("renderD*"))
+    return str(nodes[0]) if nodes else None
 
 
 def wayland_socket() -> str | None:

@@ -10,5 +10,6 @@
   "ports": [],
   "workdir": "/workspace",
   "ephemeral": false,
-  "wayland": false
+  "wayland": false,
+  "gpu": null
 }

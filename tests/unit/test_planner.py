@@ -10,6 +10,7 @@ from nixant.planner import (
     AddDevice,
     Change,
     Effect,
+    Host,
     RemoveDevice,
     SetConfig,
     SetDevice,
@@ -390,7 +391,7 @@ def wayland_device(connect: str) -> dict[str, str]:
 def test_wayland_adds_a_proxy_to_the_session_socket(spec: MachineSpec) -> None:
     spec = replace(spec, wayland=True)
     current = state(devices={"nixant-mount-workspace": MOUNT})
-    changes = plan(spec, current, "/run/user/1000/wayland-1")
+    changes = plan(spec, current, Host("/run/user/1000/wayland-1"))
     wanted = wayland_device("unix:/run/user/1000/wayland-1")
     del wanted["type"]
     assert changes == [
@@ -420,7 +421,7 @@ def test_wayland_without_a_session_keeps_the_recorded_socket(
         "nixant-wayland": wayland_device("unix:/run/user/1000/wayland-1"),
     }
     assert plan(spec, state(devices=devices)) == []
-    (change,) = plan(spec, state(devices=devices), "/run/user/1000/wayland-0")
+    (change,) = plan(spec, state(devices=devices), Host("/run/user/1000/wayland-0"))
     assert change.action == SetDevice(
         "nixant-wayland", {"connect": "unix:/run/user/1000/wayland-0"}
     )
@@ -431,7 +432,7 @@ def test_wayland_off_removes_the_proxy(spec: MachineSpec) -> None:
         "nixant-mount-workspace": MOUNT,
         "nixant-wayland": wayland_device("unix:/run/user/1000/wayland-0"),
     }
-    (change,) = plan(spec, state(devices=devices), "/run/user/1000/wayland-0")
+    (change,) = plan(spec, state(devices=devices), Host("/run/user/1000/wayland-0"))
     assert change.action == RemoveDevice("nixant-wayland")
 
 
@@ -442,3 +443,44 @@ def test_vm_wayland_is_unsupported(spec: MachineSpec) -> None:
     ]
     changes = plan(vm, state(devices={"nixant-mount-workspace": MOUNT}, kind="vm"))
     assert [(c.setting, c.effect) for c in changes] == [("wayland", Effect.UNSUPPORTED)]
+
+
+RENDER = "/dev/dri/renderD128"
+GPU = {"source": RENDER, "path": RENDER, "gid": "303", "mode": "0660"}
+
+
+def test_gpu_shares_only_the_render_node(spec: MachineSpec) -> None:
+    spec = replace(spec, gpu_gid=303)
+    current = state(devices={"nixant-mount-workspace": MOUNT})
+    assert plan(spec, current, Host(render_node=RENDER)) == [
+        Change(
+            "gpu",
+            Effect.LIVE,
+            "add nixant-gpu",
+            AddDevice("nixant-gpu", "unix-char", GPU),
+        )
+    ]
+    shared = {
+        "nixant-mount-workspace": MOUNT,
+        "nixant-gpu": {"type": "unix-char", **GPU},
+    }
+    assert plan(spec, state(devices=shared), Host(render_node=RENDER)) == []
+    (change,) = plan(replace(spec, gpu_gid=None), state(devices=shared))
+    assert change.action == RemoveDevice("nixant-gpu")
+
+
+def test_gpu_needs_a_host_render_node(spec: MachineSpec) -> None:
+    spec = replace(spec, gpu_gid=303)
+    assert [(c.setting, c.effect) for c in validate(spec)] == [
+        ("gpu", Effect.UNSUPPORTED)
+    ]
+    assert validate(spec, Host(render_node=RENDER)) == []
+    changes = plan(spec, state(devices={"nixant-mount-workspace": MOUNT}))
+    assert [(c.setting, c.effect) for c in changes] == [("gpu", Effect.UNSUPPORTED)]
+
+
+def test_vm_gpu_is_unsupported(spec: MachineSpec) -> None:
+    vm = replace(spec, kind="vm", gpu_gid=303)
+    (change,) = validate(vm, Host(render_node=RENDER))
+    assert (change.setting, change.effect) == ("gpu", Effect.UNSUPPORTED)
+    assert "VMs" in change.summary

@@ -270,6 +270,38 @@ windows and input.
   socket also exposes the microphone and, through PipeWire, possibly other
   media nodes such as screen-capture streams.
 
+## 8. A shared GPU exposes the host kernel driver
+
+**Priority: medium — opt-in; leave off for code you do not trust.**
+
+`nixant.gpu = true` shares the host's render node with the guest. The guest
+can then call the host GPU driver (`amdgpu`, `i915`, `xe`, `nouveau` and so
+on) directly. These drivers are large, parse complex guest-supplied command
+buffers and memory mappings, and regularly receive security fixes. A bug
+there runs in the host kernel, outside the container, and can lead to full
+host compromise.
+
+Other effects:
+
+- Bugs in GPU memory isolation have leaked data between processes before
+  (for example LeftoverLocals, CVE-2023-4969), which could expose fragments
+  of what host applications render.
+- Guest code can submit long-running or hanging GPU jobs that stall the
+  desktop until the driver resets the GPU.
+
+Only the render node is shared. Without a display (`card`) node, guest code
+cannot set display modes or read the screen, and it gets no new access to
+files or the network.
+
+**Relevant code:** [planner.py](src/nixant/planner.py), `_gpu()`;
+[deploy.py](src/nixant/deploy.py), `render_node()`.
+
+### Recommended mitigation
+
+- Keep the host kernel and firmware updated.
+- Leave `gpu` off under `isolation = "agent"` and for untrusted code, and
+  review configuration changes that turn it on.
+
 ## Hardening order
 
 1. Close guest-writable Git metadata paths to host execution.

@@ -54,6 +54,10 @@ let
       x.environment.sessionVariables.DISPLAY == ":0" &&
       x.environment.sessionVariables.WAYLAND_DISPLAY == "wayland-0" &&
       lib.hasInfix "xwayland-satellite :0" x.systemd.user.services.nixant-xwayland.serviceConfig.ExecStart;
+    noGpu = !config.hardware.graphics.enable && !(builtins.elem "render" config.users.users.dev.extraGroups);
+    gpu = let g = evaluate { nixant.gpu = true; }; in
+      g.hardware.graphics.enable && builtins.elem "render" g.users.users.dev.extraGroups &&
+      g.nixant.runtime.gpu.gid == g.users.groups.render.gid;
     assertions = lib.all (item: item.assertion) config.assertions;
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))

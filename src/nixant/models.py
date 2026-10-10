@@ -114,6 +114,8 @@ class MachineSpec:
     ports: tuple[PortSpec, ...] = ()
     ephemeral: bool = False
     wayland: bool = False
+    # The guest's render group; None leaves the host GPU unshared.
+    gpu_gid: int | None = None
 
     def to_runtime(self) -> dict[str, Any]:
         return {
@@ -150,6 +152,7 @@ class MachineSpec:
             "workdir": self.workdir,
             "ephemeral": self.ephemeral,
             "wayland": self.wayland,
+            "gpu": None if self.gpu_gid is None else {"gid": self.gpu_gid},
         }
 
     @classmethod
@@ -191,6 +194,7 @@ class MachineSpec:
                 workdir=_absolute(data["workdir"]),
                 ephemeral=_boolean(data.get("ephemeral", False)),
                 wayland=_boolean(data.get("wayland", False)),
+                gpu_gid=_optional_gid(data.get("gpu")),
                 cpus=_optional_integer(data["cpus"]),
                 memory_bytes=_optional_integer(data["memoryBytes"]),
                 disk_bytes=_optional_integer(data["diskBytes"]),
@@ -220,6 +224,14 @@ class MachineSpec:
             return spec
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise NixantError(f"invalid nixant runtime: {exc}") from exc
+
+
+def _optional_gid(value: Any) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("gpu must be null or an object")
+    return _integer(value["gid"])
 
 
 def _optional_string(value: Any) -> str | None:

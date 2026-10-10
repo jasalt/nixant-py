@@ -19,7 +19,7 @@ in {
     uid = cfg.user.uid;
     group = cfg.user.name;
     home = "/home/${cfg.user.name}";
-    extraGroups = lib.optional (!agent) "wheel";
+    extraGroups = lib.optional (!agent) "wheel" ++ lib.optional cfg.gpu "render";
     # shell and exec use runuser, which opens no login session; lingering
     # keeps the user manager and /run/user/<uid> around for Wayland.
     linger = lib.mkIf cfg.wayland true;
@@ -61,6 +61,7 @@ in {
       RestartSec = 5;
     };
   };
+  hardware.graphics.enable = lib.mkIf cfg.gpu true;
   environment.extraInit = lib.mkIf cfg.wayland ''
     if [ -z "''${XDG_RUNTIME_DIR-}" ] && [ -d "/run/user/$(id -u)" ]; then
       export XDG_RUNTIME_DIR="/run/user/$(id -u)"
