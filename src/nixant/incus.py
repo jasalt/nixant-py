@@ -319,6 +319,9 @@ class IncusProvider:
             *argv,
         ]
 
+    def root_exec_argv(self, name: str, argv: list[str]) -> list[str]:
+        return ["incus", "exec", _local(name), "--", *argv]
+
     def run(
         self,
         name: str,

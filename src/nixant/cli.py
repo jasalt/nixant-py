@@ -292,6 +292,74 @@ def exec_command(
     _enter(ctx, target, command)
 
 
+def logs_script(
+    recorded: dict[str, str], names: list[str], lines: int, follow: bool
+) -> str:
+    """The guest command: the journal for units (or all of it), tail for files.
+
+    Followed together, both run in the background; the trap stops them when
+    the shell ends, since background jobs of a non-interactive sh ignore
+    SIGINT and would outlive incus exec.
+    """
+    files = [recorded[name] for name in names if name in recorded]
+    units = [name for name in names if name not in recorded]
+    parts = []
+    if units or not files:
+        journal = ["journalctl", "--no-pager", "-n", str(lines)]
+        journal += ["-f"] if follow else []
+        for unit in units:
+            journal += ["-u", unit]
+        parts.append(shlex.join(journal))
+    if files:
+        tail = ["tail", "-n", str(lines), *(["-F"] if follow else []), "--", *files]
+        parts.append(shlex.join(tail))
+    if follow and len(parts) > 1:
+        return "trap 'kill 0' EXIT INT TERM HUP; " + " & ".join(parts) + " & wait"
+    return "; ".join(parts)
+
+
+@app.command()
+def logs(
+    ctx: typer.Context,
+    names: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[NAME]...",
+            help="Log files from nixant.logs, or systemd units (default: the "
+            "whole journal).",
+        ),
+    ] = None,
+    target: str | None = typer.Option(None, "--target", "-t", help=CWD_TARGET_HELP),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Keep printing."),
+    lines: int = typer.Option(
+        50, "--lines", "-n", min=0, help="Earlier lines to show first."
+    ),
+) -> None:
+    """Show guest logs: the journal, units, or files named in nixant.logs."""
+    provider = IncusProvider(ctx.obj["runner"])
+    root = discover_project()
+    target = _target(ctx, root, target)
+    state = require_instance(
+        lookup(provider, root, target, require_schema=False), provider, root, target
+    )
+    if state.status != "Running":
+        _offer_start(ctx, provider, root, target, state.name, state.kind)
+    try:
+        recorded = json.loads(state.config.get(PREFIX + "logs", "{}"))
+    except ValueError:
+        recorded = {}
+    if not isinstance(recorded, dict):
+        recorded = {}
+    script = logs_script(recorded, names or [], lines, follow)
+    argv = provider.root_exec_argv(
+        state.name, ["/run/current-system/sw/bin/sh", "-c", script]
+    )
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        raise NixantError(f"cannot execute incus: {exc}") from exc
+
+
 @app.command()
 def down(
     ctx: typer.Context,

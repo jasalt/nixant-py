@@ -50,6 +50,7 @@ let
       };
     };
   };
+  logNames = builtins.attrNames cfg.logs;
   hostnames = builtins.filter (name: name != null) (map (port: port.hostname) cfg.ports);
   hostnamePattern = "[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*";
   mounts = lib.filterAttrs (_: mount: mount.enable) cfg.mounts;
@@ -84,6 +85,10 @@ let
       message = "nixant.isolation = \"agent\" only allows writing to the workspace mount; make these read-only: ${lib.concatStringsSep ", " extraWritableMounts}."; }
     { assertion = !agent || nonLoopbackPorts == [];
       message = "nixant.isolation = \"agent\" only publishes loopback ports; set address = \"127.0.0.1\" or remove these nixant.ports entries: ${lib.concatStringsSep ", " (map (port: "${port.address}:${toString port.host}") nonLoopbackPorts)}."; }
+    { assertion = lib.all (name: builtins.match "[a-z0-9][a-z0-9_.-]*" name != null) logNames;
+      message = "nixant.logs names must be lowercase letters, digits, dots, dashes or underscores."; }
+    { assertion = lib.all absolute (builtins.attrValues cfg.logs);
+      message = "nixant.logs paths must be absolute guest paths."; }
     { assertion = !cfg.x11 || cfg.wayland;
       message = "nixant.x11 runs X11 apps on the Wayland socket; also set nixant.wayland = true."; }
     { assertion = lib.versionAtLeast lib.trivial.release "26.05";
@@ -125,6 +130,15 @@ in {
       description = "Create the instance as ephemeral: Incus deletes it when it stops.";
     };
     ports = mkOption { type = types.listOf portType; default = []; };
+    logs = mkOption {
+      type = types.attrsOf types.str;
+      default = {};
+      example = { debug = "/workspace/log/debug.log"; };
+      description = ''
+        Log files that `nixant logs NAME` shows, by name, as absolute guest
+        paths. Recorded on the instance by `nixant up`.
+      '';
+    };
     wayland = mkOption {
       type = types.bool;
       default = false;
@@ -173,7 +187,7 @@ in {
       diskBytes = cfg.disk;
       mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) mounts;
       ports = map (port: { inherit (port) host guest address hostname; }) cfg.ports;
-      inherit (cfg) wayland;
+      inherit (cfg) wayland logs;
       gpu = if cfg.gpu then { gid = config.users.groups.render.gid; } else null;
       workdir = if cfg.workdir != null then cfg.workdir
         else if mounts ? workspace then mounts.workspace.target else user.home;

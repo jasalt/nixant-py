@@ -7,7 +7,7 @@ import time
 from nixant.errors import CommandError, NixantError
 from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState
-from nixant.ownership import PREFIX, routes_value
+from nixant.ownership import PREFIX, optional_metadata
 from nixant.readiness import readiness_timeout, wait_ready
 from nixant.run import Runner
 
@@ -53,12 +53,12 @@ def activate(
             PREFIX + "user": spec.user.name,
             PREFIX + "workdir": spec.workdir,
         }
-        routes = routes_value(spec)
-        if routes is not None:
-            recorded[PREFIX + "routes"] = routes
+        optional = optional_metadata(spec)
+        recorded.update({k: v for k, v in optional.items() if v is not None})
         provider.set_metadata(name, recorded)
-        if routes is None:
-            provider.unset_metadata(name, [PREFIX + "routes"])
+        unset = [key for key, value in optional.items() if value is None]
+        if unset:
+            provider.unset_metadata(name, unset)
         if state == "degraded":
             print(f"warning: {name} activated with failed units", file=sys.stderr)
             provider.run(name, ["systemctl", "--failed", "--no-pager"], check=False)

@@ -11,5 +11,6 @@
   "workdir": "/workspace",
   "ephemeral": false,
   "wayland": false,
-  "gpu": null
+  "gpu": null,
+  "logs": {}
 }

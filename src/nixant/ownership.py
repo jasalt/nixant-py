@@ -29,6 +29,16 @@ def routes_value(spec: MachineSpec) -> str | None:
     return json.dumps(routes, sort_keys=True) if routes else None
 
 
+def logs_value(spec: MachineSpec) -> str | None:
+    """The name -> guest path map `nixant logs` reads, or None without any."""
+    return json.dumps(dict(spec.logs), sort_keys=True) if spec.logs else None
+
+
+def optional_metadata(spec: MachineSpec) -> dict[str, str | None]:
+    """Keys recorded on the instance when set and removed when None."""
+    return {PREFIX + "routes": routes_value(spec), PREFIX + "logs": logs_value(spec)}
+
+
 def check_owner(state: MachineState, root: Path, target: str) -> None:
     config = state.config
     if config.get(PREFIX + "managed") != "true":

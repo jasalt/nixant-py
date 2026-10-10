@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 from typer.testing import CliRunner
 
-from nixant.cli import app
+from nixant.cli import app, logs_script
 from nixant.incus import IncusProvider
 from nixant.models import MachineState
 from nixant.ownership import PREFIX, metadata
@@ -277,4 +277,47 @@ def test_guest_entry_keeps_the_callers_stdin_and_terminal(
     assert argv[:3] == ["incus", "exec", "local:owned-dev"]
     assert not {"-T", "-t", "--force-noninteractive", "-n"} & set(
         argv[: argv.index("--")]
+    )
+
+
+def test_logs_default_is_the_journal(enter: tuple[Mock, Mock]) -> None:
+    lookup, execute = enter
+    result = CliRunner().invoke(app, ["logs"])
+    assert result.exit_code == 0, result.output
+    argv = execute.call_args.args[1]
+    assert argv[:4] == ["incus", "exec", "local:owned-dev", "--"]
+    assert argv[4:] == [
+        "/run/current-system/sw/bin/sh",
+        "-c",
+        "journalctl --no-pager -n 50",
+    ]
+
+
+def test_logs_names_recorded_files_and_units(enter: tuple[Mock, Mock]) -> None:
+    lookup, execute = enter
+    state = lookup.return_value
+    lookup.return_value = replace(
+        state,
+        config={**state.config, PREFIX + "logs": '{"debug": "/workspace/log/d.log"}'},
+    )
+    result = CliRunner().invoke(
+        app, ["logs", "debug", "nginx", "-f", "-n", "5", "-t", "x"]
+    )
+    assert result.exit_code == 0, result.output
+    assert lookup.call_args.args[2] == "x"
+    assert execute.call_args.args[1][-1] == (
+        "trap 'kill 0' EXIT INT TERM HUP; "
+        "journalctl --no-pager -n 5 -f -u nginx & "
+        "tail -n 5 -F -- /workspace/log/d.log & wait"
+    )
+
+
+def test_logs_script_files_only() -> None:
+    recorded = {"debug": "/w/debug.log", "php": "/w/php error.log"}
+    assert logs_script(recorded, ["debug", "php"], 10, False) == (
+        "tail -n 10 -- /w/debug.log '/w/php error.log'"
+    )
+    assert logs_script(recorded, ["debug"], 10, True) == "tail -n 10 -F -- /w/debug.log"
+    assert logs_script(recorded, ["debug", "sshd"], 3, False) == (
+        "journalctl --no-pager -n 3 -u sshd; tail -n 3 -- /w/debug.log"
     )

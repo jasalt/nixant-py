@@ -116,6 +116,8 @@ class MachineSpec:
     wayland: bool = False
     # The guest's render group; None leaves the host GPU unshared.
     gpu_gid: int | None = None
+    # (name, guest path) pairs that `nixant logs NAME` shows.
+    logs: tuple[tuple[str, str], ...] = ()
 
     def to_runtime(self) -> dict[str, Any]:
         return {
@@ -153,6 +155,7 @@ class MachineSpec:
             "ephemeral": self.ephemeral,
             "wayland": self.wayland,
             "gpu": None if self.gpu_gid is None else {"gid": self.gpu_gid},
+            "logs": dict(self.logs),
         }
 
     @classmethod
@@ -195,6 +198,7 @@ class MachineSpec:
                 ephemeral=_boolean(data.get("ephemeral", False)),
                 wayland=_boolean(data.get("wayland", False)),
                 gpu_gid=_optional_gid(data.get("gpu")),
+                logs=_logs(data.get("logs", {})),
                 cpus=_optional_integer(data["cpus"]),
                 memory_bytes=_optional_integer(data["memoryBytes"]),
                 disk_bytes=_optional_integer(data["diskBytes"]),
@@ -224,6 +228,14 @@ class MachineSpec:
             return spec
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise NixantError(f"invalid nixant runtime: {exc}") from exc
+
+
+def _logs(value: Any) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, dict):
+        raise ValueError("logs must be an object")
+    return tuple(
+        sorted((_string(name), _absolute(path)) for name, path in value.items())
+    )
 
 
 def _optional_gid(value: Any) -> int | None:

@@ -57,17 +57,21 @@ def test_completion(spec: MachineSpec, rc: int, expected: str) -> None:
     runner.pipe.assert_not_called()
 
 
-def test_completion_records_and_clears_routes(spec: MachineSpec) -> None:
+def test_completion_records_and_clears_routes_and_logs(spec: MachineSpec) -> None:
     ports = (PortSpec(8105, 80, hostname="laive.localhost"), PortSpec(9, 9))
+    logs = (("debug", "/workspace/log/debug.log"),)
     provider, runner, events = setup(0)
-    activate(provider, runner, replace(spec, ports=ports), SYSTEM)
+    activate(provider, runner, replace(spec, ports=ports, logs=logs), SYSTEM)
     assert events[-1][PREFIX + "routes"] == '{"laive.localhost": 8105}'
+    assert events[-1][PREFIX + "logs"] == '{"debug": "/workspace/log/debug.log"}'
     provider.unset_metadata.assert_not_called()
 
     provider, runner, events = setup(0)
     activate(provider, runner, spec, SYSTEM)
     assert PREFIX + "routes" not in events[-1]
-    provider.unset_metadata.assert_called_once_with("test-dev", [PREFIX + "routes"])
+    provider.unset_metadata.assert_called_once_with(
+        "test-dev", [PREFIX + "routes", PREFIX + "logs"]
+    )
 
 
 @pytest.mark.parametrize("rc", [1, 2, 3, 5])

@@ -15,7 +15,7 @@ from nixant.naming import get_override
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build
 from nixant.nix.eval import evaluate
-from nixant.ownership import PREFIX, metadata, resolve, routes_value
+from nixant.ownership import PREFIX, metadata, optional_metadata, resolve
 from nixant.planner import (
     PORT_PREFIX,
     WAYLAND_DEVICE,
@@ -262,14 +262,14 @@ def _refresh_runtime(
 ) -> None:
     """Settings that do not change the system closure still drive shell/exec."""
     runtime = {PREFIX + "user": spec.user.name, PREFIX + "workdir": spec.workdir}
-    routes = routes_value(spec)
-    if routes is not None:
-        runtime[PREFIX + "routes"] = routes
+    optional = optional_metadata(spec)
+    runtime.update({k: v for k, v in optional.items() if v is not None})
     stale = {k: v for k, v in runtime.items() if state.config.get(k) != v}
     if stale:
         provider.set_metadata(spec.instance_name, stale)
-    if routes is None and PREFIX + "routes" in state.config:
-        provider.unset_metadata(spec.instance_name, [PREFIX + "routes"])
+    unset = [k for k, v in optional.items() if v is None and k in state.config]
+    if unset:
+        provider.unset_metadata(spec.instance_name, unset)
 
 
 def _recorded_routes(state: MachineState | None) -> dict[str, int]:

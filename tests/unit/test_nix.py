@@ -289,3 +289,13 @@ def test_duplicate_runtime_hostnames(runtime: dict) -> None:
     ]
     with pytest.raises(NixantError, match="hostnames must be unique"):
         MachineSpec.from_runtime(runtime)
+
+
+def test_logs_runtime(runtime: dict) -> None:
+    runtime["logs"] = {"php": "/w/php.log", "debug": "/w/debug.log"}
+    spec = MachineSpec.from_runtime(runtime)
+    assert spec.logs == (("debug", "/w/debug.log"), ("php", "/w/php.log"))
+    assert spec.to_runtime() == runtime
+    runtime["logs"] = {"debug": "relative.log"}
+    with pytest.raises(NixantError, match="invalid nixant runtime"):
+        MachineSpec.from_runtime(runtime)

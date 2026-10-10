@@ -32,6 +32,9 @@ let
     x11NeedsWayland = rejects { nixant.x11 = true; };
     x11WithWayland = succeeds (evaluate { nixant.wayland = true; nixant.x11 = true; });
     gpuRenderGid = (evaluate { nixant.gpu = true; }).gpu == { gid = 303; };
+    logs = (evaluate { nixant.logs.debug = "/workspace/log/debug.log"; }).logs == { debug = "/workspace/log/debug.log"; };
+    logRelativePath = rejects { nixant.logs.debug = "log/debug.log"; };
+    logBadName = rejects { nixant.logs."Debug Log" = "/var/log/x"; };
     golden = base == builtins.fromJSON (builtins.readFile ./runtime.json);
     sizes = let runtime = evaluate { nixant.memory = "4GiB"; nixant.disk = 1000; };
       in runtime.memoryBytes == 4294967296 && runtime.diskBytes == 1000;
