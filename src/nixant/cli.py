@@ -15,7 +15,7 @@ import click
 import typer
 from typer.core import TyperGroup
 
-from nixant import deploy, snapshots
+from nixant import deploy, doctor, snapshots
 from nixant.adopt import adopt as adopt_instance
 from nixant.adopt import choose
 from nixant.errors import CommandError, NixantError, UsageError
@@ -110,7 +110,8 @@ def main(
     ),
 ) -> None:
     """Manage local NixOS development environments."""
-    if not ctx.meta.get("nixant.help"):
+    # doctor reports missing tools itself.
+    if not ctx.meta.get("nixant.help") and ctx.invoked_subcommand != "doctor":
         check_host_tools()
     ctx.ensure_object(dict)
     ctx.obj["runner"] = Runner(verbose=verbose)
@@ -590,6 +591,13 @@ def proxy(
         port=port,
         https_port=https_port if https else None,
     )
+
+
+@app.command("doctor")
+def doctor_command(ctx: typer.Context) -> None:
+    """Check the host requirements, without a project or Nix evaluation."""
+    if not doctor.report(doctor.checks(ctx.obj["runner"]), typer.echo):
+        raise typer.Exit(1)
 
 
 @app.command()

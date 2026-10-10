@@ -17,6 +17,8 @@ You describe an environment as a `nixosConfiguration` in your project's flake. n
 
 nixant never changes Incus server configuration.
 
+`nixant doctor` checks these requirements without a project or a Nix evaluation: platform, `incus`/`nix`/`git` on `PATH`, `incus-admin` membership, a reachable Incus daemon, idmapped mounts when Incus reports them, the default profile's root disk and NIC, multi-user Nix and flakes. It warns about what only optional features need (`caddy` for `proxy`, a Wayland session for `wayland`, a render node for `gpu`), and exits non-zero when a requirement fails.
+
 ## Running nixant
 
 Nix builds the CLI, so the host needs no Python environment:
