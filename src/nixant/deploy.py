@@ -18,6 +18,7 @@ from nixant.nix.eval import evaluate
 from nixant.ownership import PREFIX, metadata, resolve, routes_value
 from nixant.planner import (
     PORT_PREFIX,
+    WAYLAND_DEVICE,
     Change,
     Effect,
     SetRootSize,
@@ -69,7 +70,7 @@ def rebuild(
         raise NixantError(
             f"instance {spec.instance_name} is not running; run nixant up"
         )
-    outer = plan(spec, state)
+    outer = plan(spec, state, wayland_socket())
     if outer:
         fields = ", ".join(sorted({change.setting for change in outer}))
         typer.echo(
@@ -154,8 +155,16 @@ def _create(
 
 def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) -> None:
     """Store every change on the instance, or refuse the whole set up front."""
-    changes = plan(spec, state)
+    socket = wayland_socket()
+    changes = plan(spec, state, socket)
     _refuse(changes, "cannot apply configuration to existing instance")
+    if spec.wayland and socket is None and WAYLAND_DEVICE not in state.devices:
+        typer.echo(
+            f"warning: WAYLAND_DISPLAY is not set; the guest will use "
+            f"/run/user/{spec.user.uid}/wayland-0 on the host. Run nixant up "
+            f"from a graphical session to record its socket",
+            err=True,
+        )
     if any(isinstance(c.action, SetRootSize) for c in changes):
         provider.check_quota(state.expanded_devices.get("root", {}).get("pool"))
     # Restart-effect settings are stored now (Incus accepts them on a running
@@ -171,6 +180,17 @@ def _reconcile(provider: IncusProvider, spec: MachineSpec, state: MachineState) 
                     f"run nixant restart",
                     err=True,
                 )
+
+
+def wayland_socket() -> str | None:
+    """The compositor socket of the session running nixant, if it has one."""
+    display = os.environ.get("WAYLAND_DISPLAY")
+    if not display:
+        return None
+    if display.startswith("/"):
+        return display
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return f"{runtime}/{display}" if runtime else None
 
 
 def _refuse(changes: list[Change], reason: str) -> None:

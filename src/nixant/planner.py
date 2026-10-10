@@ -18,6 +18,9 @@ from nixant.models import MachineSpec, MachineState, MountSpec
 
 MOUNT_PREFIX = "nixant-mount-"
 PORT_PREFIX = "nixant-port-"
+WAYLAND_DEVICE = "nixant-wayland"
+# /dev is the one guest directory that exists before the proxy starts.
+WAYLAND_LISTEN = "/dev/nixant-wayland-0"
 
 _UNITS = {
     "": 1,
@@ -212,7 +215,10 @@ def _device_changes(
     return removals + updates + additions
 
 
-def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
+def plan(
+    spec: MachineSpec, state: MachineState, wayland_socket: str | None = None
+) -> list[Change]:
+    """``wayland_socket`` is the host compositor socket of the calling session."""
     changes: list[Change] = []
     if state.kind != spec.kind:
         changes.append(
@@ -277,21 +283,33 @@ def plan(spec: MachineSpec, state: MachineState) -> list[Change]:
     changes.extend(unsupported)
     if not any(change.setting == "ports" for change in unsupported):
         changes.extend(_ports(spec, state))
+    if not any(change.setting == "wayland" for change in unsupported):
+        changes.extend(_wayland(spec, state, wayland_socket))
     return changes
 
 
 def validate(spec: MachineSpec) -> list[Change]:
     """Settings no instance can take, known before one is inspected or created."""
+    changes = []
     if spec.kind == "vm" and spec.ports:
-        return [
+        changes.append(
             Change(
                 "ports",
                 Effect.UNSUPPORTED,
                 "ports are not supported on VMs: Incus only allows NAT-mode proxies "
                 "there, which need a static IPv4 address on the instance NIC",
             )
-        ]
-    return []
+        )
+    if spec.kind == "vm" and spec.wayland:
+        changes.append(
+            Change(
+                "wayland",
+                Effect.UNSUPPORTED,
+                "wayland is not supported on VMs: Incus cannot proxy a unix "
+                "socket into a VM",
+            )
+        )
+    return changes
 
 
 def _ports(spec: MachineSpec, state: MachineState) -> list[Change]:
@@ -311,6 +329,38 @@ def _ports(spec: MachineSpec, state: MachineState) -> list[Change]:
             "ports",
             "listen",
         )
+    )
+
+
+def _wayland(
+    spec: MachineSpec, state: MachineState, socket: str | None
+) -> list[Change]:
+    """The proxy re-resolves ``connect`` per connection, so it outlives the
+    host session; without a session to read it from, the recorded one stays."""
+    desired = {}
+    if spec.wayland:
+        recorded = state.devices.get(WAYLAND_DEVICE, {}).get("connect")
+        default = f"unix:/run/user/{spec.user.uid}/wayland-0"
+        uid, gid = str(spec.user.uid), str(spec.user.gid)
+        desired[WAYLAND_DEVICE] = {
+            "bind": "container",
+            "connect": f"unix:{socket}" if socket else recorded or default,
+            "listen": f"unix:{WAYLAND_LISTEN}",
+            "uid": uid,
+            "gid": gid,
+            "mode": "0600",
+            # Connect to the compositor as the host user, not as root.
+            "security.uid": uid,
+            "security.gid": gid,
+        }
+    return _device_changes(
+        WAYLAND_DEVICE,
+        "proxy",
+        desired,
+        state.devices,
+        Effect.LIVE,
+        "wayland",
+        "listen",
     )
 
 

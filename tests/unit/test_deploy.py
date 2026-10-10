@@ -8,6 +8,7 @@ from fake_incus import FakeIncus
 from typer.testing import CliRunner
 
 from nixant.cli import app, parse_duration
+from nixant.deploy import wayland_socket
 from nixant.errors import NixantError, UsageError
 from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState, MountSpec, PortSpec
@@ -620,3 +621,38 @@ def test_restart_effect_changes_are_stored_and_announced(
 def test_activation_has_a_default_deadline(deploy: dict[str, Mock]) -> None:
     assert CliRunner().invoke(app, ["up"]).exit_code == 0
     assert deploy["activate"].call_args.kwargs["timeout"] == 1800
+
+
+@pytest.mark.parametrize(
+    ("display", "runtime", "expected"),
+    [
+        ("wayland-1", "/run/user/1000", "/run/user/1000/wayland-1"),
+        ("/tmp/compositor", None, "/tmp/compositor"),
+        ("wayland-0", None, None),
+        (None, "/run/user/1000", None),
+    ],
+)
+def test_wayland_socket_from_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+    display: str | None,
+    runtime: str | None,
+    expected: str | None,
+) -> None:
+    for name, value in (("WAYLAND_DISPLAY", display), ("XDG_RUNTIME_DIR", runtime)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert wayland_socket() == expected
+
+
+def test_up_warns_when_wayland_has_no_session(
+    deploy: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    spec = replace(deploy["evaluate"].return_value.spec, wayland=True)
+    deploy["evaluate"].return_value = Evaluation(spec, "system.drv")
+    result = CliRunner().invoke(app, ["up"])
+    assert result.exit_code == 0, result.output
+    assert "wayland: add nixant-wayland" in result.output
+    assert "WAYLAND_DISPLAY is not set" in result.output

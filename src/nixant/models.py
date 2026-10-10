@@ -113,6 +113,7 @@ class MachineSpec:
     disk_bytes: int | None = None
     ports: tuple[PortSpec, ...] = ()
     ephemeral: bool = False
+    wayland: bool = False
 
     def to_runtime(self) -> dict[str, Any]:
         return {
@@ -148,6 +149,7 @@ class MachineSpec:
             ],
             "workdir": self.workdir,
             "ephemeral": self.ephemeral,
+            "wayland": self.wayland,
         }
 
     @classmethod
@@ -188,6 +190,7 @@ class MachineSpec:
                 ),
                 workdir=_absolute(data["workdir"]),
                 ephemeral=_boolean(data.get("ephemeral", False)),
+                wayland=_boolean(data.get("wayland", False)),
                 cpus=_optional_integer(data["cpus"]),
                 memory_bytes=_optional_integer(data["memoryBytes"]),
                 disk_bytes=_optional_integer(data["diskBytes"]),

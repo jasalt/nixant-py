@@ -9,5 +9,6 @@
   "mounts": {"workspace": {"source": ".", "target": "/workspace", "readOnly": false}},
   "ports": [],
   "workdir": "/workspace",
-  "ephemeral": false
+  "ephemeral": false,
+  "wayland": false
 }

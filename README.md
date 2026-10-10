@@ -148,6 +148,19 @@ hosts get a 404, and a hostname claimed by two instances is not routed.
 
 Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy on the desktop with `nixant proxy --routes-from 'limactl shell default nixant proxy --routes'`; `--routes` prints the route table as JSON and the desktop polls it every few seconds. The desktop needs `caddy` and `nixant`, and Lima's forwards of the sites' ports to the desktop's loopback.
 
+## Wayland windows
+
+`nixant.wayland = true` shows guest windows on the host desktop. `up` adds a `nixant-wayland` proxy device that connects to the compositor socket of the session it runs in (`$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`) and listens in the guest on `/dev/nixant-wayland-0`, owned by the guest user with mode `0600`. The proxy connects to the host as your user, not as root. The guest module links that socket to `$XDG_RUNTIME_DIR/wayland-0` and sets `WAYLAND_DISPLAY=wayland-0` and `NIXOS_OZONE_WL=1`, so Electron and Chromium use Wayland too. It also enables lingering for the user, because `shell` and `exec` open no login session that would create `/run/user/<uid>`.
+
+- The proxy looks the socket up on each new connection, so it keeps working after you log out and in again, as long as the compositor keeps the same socket name.
+- When `up` runs without `WAYLAND_DISPLAY` (for example over ssh), an existing device keeps the socket it recorded. A new one gets `/run/user/<uid>/wayland-0` and `up` prints a warning.
+- Apps render in software (shared memory, or llvmpipe for OpenGL). GPU passthrough is not set up.
+- X11-only apps do not get a display. The host's X socket is deliberately not shared.
+- Containers only. `up` refuses `wayland` on a VM, because Incus cannot proxy a Unix socket into one.
+- Audio is not forwarded. The same mechanism would work for it: a second proxy device for the host's `pipewire-0` or `pulse/native` socket, linked into the guest's runtime directory. Sharing it also gives the guest the microphone.
+
+The socket gives guest code a connection to your desktop compositor; see [security.md](docs/security.md#7-the-wayland-socket-reaches-the-host-desktop).
+
 ## Agent isolation
 
 `nixant.isolation = "agent"` restricts the guest for autonomous coding agents:
@@ -171,6 +184,7 @@ VM differences, verified on Incus with virtiofs mounts:
 - CPU and memory limits and mounts (add, retarget, remove) apply to a running VM.
 - A larger `disk` is stored immediately but the guest only sees it after `nixant restart`.
 - `ports` are rejected by `up` before anything is built or created: Incus only allows NAT-mode proxies on VMs, which need a static IPv4 address on the instance NIC that nixant does not manage.
+- `wayland` is rejected the same way: Incus proxies on VMs carry only TCP and UDP.
 
 ## `exec` environment caveats
 

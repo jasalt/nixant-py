@@ -20,6 +20,9 @@ in {
     group = cfg.user.name;
     home = "/home/${cfg.user.name}";
     extraGroups = lib.optional (!agent) "wheel";
+    # shell and exec use runuser, which opens no login session; lingering
+    # keeps the user manager and /run/user/<uid> around for Wayland.
+    linger = lib.mkIf cfg.wayland true;
   };
   users.groups.${cfg.user.name}.gid = cfg.user.uid;
   security.sudo.extraRules = lib.mkIf cfg.user.sudo [ {
@@ -31,6 +34,20 @@ in {
     # NixOS defines root at normal priority; mkDefault here would drop the user.
     trusted-users = lib.mkIf (!agent) [ cfg.user.name ];
   };
+  # The nixant-wayland proxy device listens on /dev/nixant-wayland-0: /dev is
+  # the only guest directory that exists before boot, and the runtime dir is a
+  # fresh tmpfs per user manager, so it is linked into place from there.
+  systemd.user.tmpfiles.users.${cfg.user.name}.rules = lib.mkIf cfg.wayland
+    [ "L+ %t/wayland-0 - - - - /dev/nixant-wayland-0" ];
+  environment.sessionVariables = lib.mkIf cfg.wayland {
+    WAYLAND_DISPLAY = "wayland-0";
+    NIXOS_OZONE_WL = "1";
+  };
+  environment.extraInit = lib.mkIf cfg.wayland ''
+    if [ -z "''${XDG_RUNTIME_DIR-}" ] && [ -d "/run/user/$(id -u)" ]; then
+      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    fi
+  '';
   system.activationScripts.nixant-stale-config = {
     deps = [ "etc" ];
     text = ''

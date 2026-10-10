@@ -371,3 +371,74 @@ def test_matching_ephemeral_is_no_change(spec: MachineSpec) -> None:
         ephemeral=True,
     )
     assert plan(spec, current) == []
+
+
+def wayland_device(connect: str) -> dict[str, str]:
+    return {
+        "type": "proxy",
+        "bind": "container",
+        "connect": connect,
+        "listen": "unix:/dev/nixant-wayland-0",
+        "uid": "1000",
+        "gid": "1000",
+        "mode": "0600",
+        "security.uid": "1000",
+        "security.gid": "1000",
+    }
+
+
+def test_wayland_adds_a_proxy_to_the_session_socket(spec: MachineSpec) -> None:
+    spec = replace(spec, wayland=True)
+    current = state(devices={"nixant-mount-workspace": MOUNT})
+    changes = plan(spec, current, "/run/user/1000/wayland-1")
+    wanted = wayland_device("unix:/run/user/1000/wayland-1")
+    del wanted["type"]
+    assert changes == [
+        Change(
+            "wayland",
+            Effect.LIVE,
+            "add nixant-wayland",
+            AddDevice("nixant-wayland", "proxy", wanted),
+        )
+    ]
+
+
+def test_wayland_without_a_session_uses_the_first_socket(spec: MachineSpec) -> None:
+    spec = replace(spec, wayland=True)
+    current = state(devices={"nixant-mount-workspace": MOUNT})
+    (change,) = plan(spec, current)
+    assert isinstance(change.action, AddDevice)
+    assert change.action.values["connect"] == "unix:/run/user/1000/wayland-0"
+
+
+def test_wayland_without_a_session_keeps_the_recorded_socket(
+    spec: MachineSpec,
+) -> None:
+    spec = replace(spec, wayland=True)
+    devices = {
+        "nixant-mount-workspace": MOUNT,
+        "nixant-wayland": wayland_device("unix:/run/user/1000/wayland-1"),
+    }
+    assert plan(spec, state(devices=devices)) == []
+    (change,) = plan(spec, state(devices=devices), "/run/user/1000/wayland-0")
+    assert change.action == SetDevice(
+        "nixant-wayland", {"connect": "unix:/run/user/1000/wayland-0"}
+    )
+
+
+def test_wayland_off_removes_the_proxy(spec: MachineSpec) -> None:
+    devices = {
+        "nixant-mount-workspace": MOUNT,
+        "nixant-wayland": wayland_device("unix:/run/user/1000/wayland-0"),
+    }
+    (change,) = plan(spec, state(devices=devices), "/run/user/1000/wayland-0")
+    assert change.action == RemoveDevice("nixant-wayland")
+
+
+def test_vm_wayland_is_unsupported(spec: MachineSpec) -> None:
+    vm = replace(spec, kind="vm", wayland=True)
+    assert [(c.setting, c.effect) for c in validate(vm)] == [
+        ("wayland", Effect.UNSUPPORTED)
+    ]
+    changes = plan(vm, state(devices={"nixant-mount-workspace": MOUNT}, kind="vm"))
+    assert [(c.setting, c.effect) for c in changes] == [("wayland", Effect.UNSUPPORTED)]

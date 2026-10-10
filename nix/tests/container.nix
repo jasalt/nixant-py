@@ -41,6 +41,13 @@ let
       runtime.cpus == 4 && runtime.memoryBytes == 1073741824;
     agentExplicitSudoFails = !(lib.all (item: item.assertion)
       (evaluate { nixant.isolation = "agent"; nixant.user.sudo = true; }).assertions);
+    noWayland = config.users.users.dev.linger != true && !(config.environment.sessionVariables ? WAYLAND_DISPLAY);
+    wayland = let wl = evaluate { nixant.wayland = true; }; in
+      wl.nixant.runtime.wayland && wl.users.users.dev.linger == true &&
+      wl.environment.sessionVariables.WAYLAND_DISPLAY == "wayland-0" &&
+      builtins.elem "L+ %t/wayland-0 - - - - /dev/nixant-wayland-0"
+        wl.systemd.user.tmpfiles.users.dev.rules &&
+      lib.hasInfix "XDG_RUNTIME_DIR" wl.environment.extraInit;
     assertions = lib.all (item: item.assertion) config.assertions;
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))

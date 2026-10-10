@@ -224,6 +224,47 @@ the shared checkout or exposed credentials are safe.
 - Add a harmless marker test demonstrating that host workspace changes survive
   snapshot restore and instance destruction, so their scope remains explicit.
 
+## 7. The Wayland socket reaches the host desktop
+
+**Priority: medium — opt-in; enable only for guests whose code you would run
+as a desktop app.**
+
+`nixant.wayland = true` proxies the host compositor socket into the guest. It
+is off by default and allowed under `isolation = "agent"`, so turning it on is
+always an explicit choice in the configuration. Because guest code can edit
+that configuration (section 2), the next host `up` can also turn it on.
+
+The proxy's guest end is mode `0600` and owned by the configured user, and the
+host end connects as the host user, not as root. The compositor treats guest
+programs like any other client of that user. Wayland is a smaller exposure
+than X11: a client cannot read other windows or global input. It can still:
+
+- show windows that imitate host dialogs, such as password or polkit prompts;
+- read the clipboard and primary selection when one of its surfaces has
+  focus, and write to them;
+- use whatever extra protocols the compositor offers to ordinary clients,
+  such as screen capture or virtual keyboards on some wlroots compositors
+  (GNOME and KDE limit these to privileged clients or portals);
+- reach compositor parsing and rendering code, a memory-safety attack
+  surface that runs as the host user outside any container.
+
+The host X11 socket, D-Bus session bus, portals, PipeWire, and the rest of
+`$XDG_RUNTIME_DIR` are not shared; only that one socket is proxied.
+
+**Relevant code:** [planner.py](src/nixant/planner.py), `_wayland()`;
+[common.nix](nix/modules/common.nix).
+
+### Recommended mitigation
+
+- Leave `wayland` off for agent guests unless a GUI is needed, and review
+  configuration changes that turn it on.
+- Do not type secrets into windows from a guest, and treat prompts that
+  appear while guest apps run with suspicion.
+- Prefer a compositor that limits privileged protocols for ordinary clients.
+- If audio is added later, it needs the same review: a PipeWire or Pulse
+  socket also exposes the microphone and, through PipeWire, possibly other
+  media nodes such as screen-capture streams.
+
 ## Hardening order
 
 1. Close guest-writable Git metadata paths to host execution.

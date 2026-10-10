@@ -123,6 +123,14 @@ in {
       description = "Create the instance as ephemeral: Incus deletes it when it stops.";
     };
     ports = mkOption { type = types.listOf portType; default = []; };
+    wayland = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Show guest windows on the host: the host's Wayland socket is proxied
+        to the guest user as wayland-0. Containers only.
+      '';
+    };
     runtime = mkOption {
       type = types.attrs;
       readOnly = true;
@@ -146,6 +154,7 @@ in {
       diskBytes = cfg.disk;
       mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) mounts;
       ports = map (port: { inherit (port) host guest address hostname; }) cfg.ports;
+      inherit (cfg) wayland;
       workdir = if cfg.workdir != null then cfg.workdir
         else if mounts ? workspace then mounts.workspace.target else user.home;
       user = {
