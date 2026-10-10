@@ -97,6 +97,7 @@ $ nixant up --dry-run    # build, then show instance changes and the package dif
 $ nixant shell           # login shell in the guest, in the matching directory (alias: ssh)
 $ nixant exec -- make    # run one command
 $ nixant logs [-f]       # guest journal; NAME... picks units or nixant.logs files
+$ nixant forward 3000    # 127.0.0.1:3000 to guest port 3000 until Ctrl-C (also: forward GUEST HOST)
 $ nixant rebuild         # re-build and always re-activate a running instance (alias: reload)
 $ nixant status          # metadata and cached build state, no evaluation
 $ nixant config          # runtime JSON, project ID, instance name, mount sources
@@ -116,6 +117,7 @@ Every command takes an optional target name (default `dev`). Without one, `shell
 - `shell` and `exec` need a running instance with at least one completed activation (`ok` or `degraded`). They do not start the instance; run `nixant up` first.
 - `status` reports, per instance, the Incus state, IPv4 addresses, activation result, whether the recorded system is `current` or `outdated` against the host GC root, and any schema mismatch.
 - `config` evaluates the target without building and prints JSON.
+- `forward GUEST_PORT [HOST_PORT]` adds a temporary loopback proxy device (`nixant-forward-<port>`), for a dev server started by hand, and removes it on Ctrl-C, SIGTERM or the terminal closing. Nothing goes into the configuration, and `up` leaves these devices alone. A forward killed with SIGKILL stays until `incus config device remove local:NAME nixant-forward-<port>`. Containers only, like `ports`.
 - `logs` shows the guest's systemd journal as root, the last 50 lines by default (`-n`), and keeps printing with `-f`. Each `NAME` is a log file declared in `nixant.logs` (`nixant.logs.debug = "/workspace/log/debug.log";`), which `tail` shows, or else a systemd unit (`nixant logs nginx phpfpm-wordpress -f`). Files and units can be mixed. `up` records the declared files on the instance, so `logs` does not evaluate Nix.
 
 ## Machine settings

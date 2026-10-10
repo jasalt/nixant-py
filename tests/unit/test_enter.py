@@ -9,6 +9,7 @@ from nixant.cli import app, logs_script
 from nixant.incus import IncusProvider
 from nixant.models import MachineState
 from nixant.ownership import PREFIX, metadata
+from nixant.planner import AddDevice, RemoveDevice
 from nixant.run import Runner
 
 
@@ -321,3 +322,37 @@ def test_logs_script_files_only() -> None:
     assert logs_script(recorded, ["debug", "sshd"], 3, False) == (
         "journalctl --no-pager -n 3 -u sshd; tail -n 3 -- /w/debug.log"
     )
+
+
+def test_forward_adds_and_removes_the_proxy(
+    enter: tuple[Mock, Mock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    applied = []
+    monkeypatch.setattr(
+        IncusProvider, "apply", lambda self, name, change: applied.append(change.action)
+    )
+    monkeypatch.setattr("nixant.cli.signal.pause", Mock(side_effect=KeyboardInterrupt))
+    result = CliRunner().invoke(app, ["forward", "3000", "8000"])
+    assert result.exit_code == 0, result.output
+    assert applied == [
+        AddDevice(
+            "nixant-forward-8000",
+            "proxy",
+            {"listen": "tcp:127.0.0.1:8000", "connect": "tcp:127.0.0.1:3000"},
+        ),
+        RemoveDevice("nixant-forward-8000"),
+    ]
+    assert "forwarding 127.0.0.1:8000 -> owned-dev:3000" in result.output
+
+
+def test_forward_refuses_a_port_in_use_and_vms(enter: tuple[Mock, Mock]) -> None:
+    lookup, _ = enter
+    state = lookup.return_value
+    lookup.return_value = replace(state, devices={"nixant-forward-3000": {}})
+    result = CliRunner().invoke(app, ["forward", "3000"])
+    assert result.exit_code == 1
+    assert "already forwarded" in result.output
+    lookup.return_value = replace(state, kind="vm")
+    result = CliRunner().invoke(app, ["forward", "3000"])
+    assert result.exit_code == 1
+    assert "not supported on VMs" in result.output

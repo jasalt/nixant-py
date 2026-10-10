@@ -18,6 +18,8 @@ from nixant.models import MachineSpec, MachineState, MountSpec
 
 MOUNT_PREFIX = "nixant-mount-"
 PORT_PREFIX = "nixant-port-"
+# Temporary `nixant forward` devices; reconciliation never touches them.
+FORWARD_PREFIX = "nixant-forward-"
 WAYLAND_DEVICE = "nixant-wayland"
 # /dev is the one guest directory that exists before the proxy starts.
 WAYLAND_LISTEN = "/dev/nixant-wayland-0"

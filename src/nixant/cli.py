@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 from collections.abc import Callable
@@ -44,6 +45,7 @@ from nixant.ownership import (
     require_instance,
     target_at,
 )
+from nixant.planner import FORWARD_PREFIX, AddDevice, Change, Effect, RemoveDevice
 from nixant.project import (
     discover_project,
     project_id,
@@ -358,6 +360,78 @@ def logs(
         os.execvp(argv[0], argv)
     except OSError as exc:
         raise NixantError(f"cannot execute incus: {exc}") from exc
+
+
+@app.command()
+def forward(
+    ctx: typer.Context,
+    guest_port: int = typer.Argument(..., min=1, max=65535),
+    host_port: int | None = typer.Argument(
+        None, min=1, max=65535, help="Default: the guest port."
+    ),
+    target: str | None = typer.Option(None, "--target", "-t", help=CWD_TARGET_HELP),
+) -> None:
+    """Forward 127.0.0.1:HOST_PORT to a guest port until Ctrl-C.
+
+    For a quick dev server; nothing is added to the configuration.
+    """
+    provider = IncusProvider(ctx.obj["runner"])
+    root = discover_project()
+    target = _target(ctx, root, target)
+    state = require_instance(
+        lookup(provider, root, target, require_schema=False), provider, root, target
+    )
+    if state.kind == "vm":
+        raise NixantError(
+            "forward is not supported on VMs: Incus only allows NAT-mode proxies there"
+        )
+    if state.status != "Running":
+        _offer_start(ctx, provider, root, target, state.name, state.kind)
+    host_port = host_port or guest_port
+    device = f"{FORWARD_PREFIX}{host_port}"
+    if device in state.devices:
+        raise NixantError(
+            f"127.0.0.1:{host_port} is already forwarded to {state.name}; if no "
+            f"nixant forward is running, remove it with "
+            f"`incus config device remove local:{state.name} {device}`"
+        )
+    values = {
+        "listen": f"tcp:127.0.0.1:{host_port}",
+        "connect": f"tcp:127.0.0.1:{guest_port}",
+    }
+    provider.apply(
+        state.name,
+        Change(
+            "forward", Effect.LIVE, f"add {device}", AddDevice(device, "proxy", values)
+        ),
+    )
+    try:
+        typer.echo(
+            f"forwarding 127.0.0.1:{host_port} -> {state.name}:{guest_port}; "
+            "Ctrl-C stops"
+        )
+        _wait_until_stopped()
+    finally:
+        provider.apply(
+            state.name,
+            Change("forward", Effect.LIVE, f"remove {device}", RemoveDevice(device)),
+        )
+    typer.echo(f"stopped forwarding 127.0.0.1:{host_port}")
+
+
+def _wait_until_stopped() -> None:
+    """Until Ctrl-C, or the terminal closing or a kill: each removes the device."""
+
+    def stop(signum: int, frame: object) -> None:
+        raise KeyboardInterrupt
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, stop)
+    try:
+        while True:
+            signal.pause()
+    except KeyboardInterrupt:
+        pass
 
 
 @app.command()
