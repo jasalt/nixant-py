@@ -39,9 +39,27 @@ in {
   # fresh tmpfs per user manager, so it is linked into place from there.
   systemd.user.tmpfiles.users.${cfg.user.name}.rules = lib.mkIf cfg.wayland
     [ "L+ %t/wayland-0 - - - - /dev/nixant-wayland-0" ];
-  environment.sessionVariables = lib.mkIf cfg.wayland {
-    WAYLAND_DISPLAY = "wayland-0";
-    NIXOS_OZONE_WL = "1";
+  environment.sessionVariables = lib.mkMerge [
+    (lib.mkIf cfg.wayland {
+      WAYLAND_DISPLAY = "wayland-0";
+      NIXOS_OZONE_WL = "1";
+    })
+    (lib.mkIf cfg.x11 { DISPLAY = ":0"; })
+  ];
+  # Exits when the host compositor goes away and reconnects on restart.
+  systemd.user.services.nixant-xwayland = lib.mkIf cfg.x11 {
+    description = "X11 apps on the host Wayland compositor";
+    wantedBy = [ "default.target" ];
+    after = [ "systemd-tmpfiles-setup.service" ];
+    unitConfig.ConditionUser = cfg.user.name;
+    environment.WAYLAND_DISPLAY = "wayland-0";
+    serviceConfig = {
+      Type = "notify";
+      NotifyAccess = "all";
+      ExecStart = "${pkgs.xwayland-satellite}/bin/xwayland-satellite :0";
+      Restart = "always";
+      RestartSec = 5;
+    };
   };
   environment.extraInit = lib.mkIf cfg.wayland ''
     if [ -z "''${XDG_RUNTIME_DIR-}" ] && [ -d "/run/user/$(id -u)" ]; then

@@ -155,9 +155,19 @@ Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy
 - The proxy looks the socket up on each new connection, so it keeps working after you log out and in again, as long as the compositor keeps the same socket name.
 - When `up` runs without `WAYLAND_DISPLAY` (for example over ssh), an existing device keeps the socket it recorded. A new one gets `/run/user/<uid>/wayland-0` and `up` prints a warning.
 - Apps render in software (shared memory, or llvmpipe for OpenGL). GPU passthrough is not set up.
-- X11-only apps do not get a display. The host's X socket is deliberately not shared.
 - Containers only. `up` refuses `wayland` on a VM, because Incus cannot proxy a Unix socket into one.
 - Audio is not forwarded. The same mechanism would work for it: a second proxy device for the host's `pipewire-0` or `pulse/native` socket, linked into the guest's runtime directory. Sharing it also gives the guest the microphone.
+
+One further setting is off by default:
+
+```nix
+nixant = {
+  wayland = true;
+  x11 = true;   # X11-only apps, through xwayland-satellite in the guest
+};
+```
+
+- `x11` runs [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) as a user service in the guest and sets `DISPLAY=:0`. X11 apps become ordinary Wayland windows, and the host's X server is never shared. It requires `wayland`. The service restarts until the compositor is reachable again, so it survives a restart of the host session. It adds Xwayland to the guest closure.
 
 The socket gives guest code a connection to your desktop compositor; see [security.md](docs/security.md#7-the-wayland-socket-reaches-the-host-desktop).
 

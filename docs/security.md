@@ -251,6 +251,11 @@ than X11: a client cannot read other windows or global input. It can still:
 The host X11 socket, D-Bus session bus, portals, PipeWire, and the rest of
 `$XDG_RUNTIME_DIR` are not shared; only that one socket is proxied.
 
+`nixant.x11` adds nothing on the host side: xwayland-satellite and Xwayland
+run inside the guest as one more Wayland client. X11's own lack of isolation
+applies only between X11 apps in that guest, which can read each other's
+windows and input.
+
 **Relevant code:** [planner.py](src/nixant/planner.py), `_wayland()`;
 [common.nix](nix/modules/common.nix).
 

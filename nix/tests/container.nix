@@ -48,6 +48,12 @@ let
       builtins.elem "L+ %t/wayland-0 - - - - /dev/nixant-wayland-0"
         wl.systemd.user.tmpfiles.users.dev.rules &&
       lib.hasInfix "XDG_RUNTIME_DIR" wl.environment.extraInit;
+    noX11 = !(config.systemd.user.services ? nixant-xwayland) &&
+      !(config.environment.sessionVariables ? DISPLAY);
+    x11 = let x = evaluate { nixant.wayland = true; nixant.x11 = true; }; in
+      x.environment.sessionVariables.DISPLAY == ":0" &&
+      x.environment.sessionVariables.WAYLAND_DISPLAY == "wayland-0" &&
+      lib.hasInfix "xwayland-satellite :0" x.systemd.user.services.nixant-xwayland.serviceConfig.ExecStart;
     assertions = lib.all (item: item.assertion) config.assertions;
   };
 in assert lib.assertMsg (lib.all (value: value) (builtins.attrValues tests))

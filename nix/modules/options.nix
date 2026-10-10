@@ -84,6 +84,8 @@ let
       message = "nixant.isolation = \"agent\" only allows writing to the workspace mount; make these read-only: ${lib.concatStringsSep ", " extraWritableMounts}."; }
     { assertion = !agent || nonLoopbackPorts == [];
       message = "nixant.isolation = \"agent\" only publishes loopback ports; set address = \"127.0.0.1\" or remove these nixant.ports entries: ${lib.concatStringsSep ", " (map (port: "${port.address}:${toString port.host}") nonLoopbackPorts)}."; }
+    { assertion = !cfg.x11 || cfg.wayland;
+      message = "nixant.x11 runs X11 apps on the Wayland socket; also set nixant.wayland = true."; }
     { assertion = lib.versionAtLeast lib.trivial.release "26.05";
       message = "nixant requires nixpkgs 26.05 or newer: the bootstrap image is newer, and switching a guest down to an older release hangs in switch-to-configuration."; }
   ];
@@ -129,6 +131,15 @@ in {
       description = ''
         Show guest windows on the host: the host's Wayland socket is proxied
         to the guest user as wayland-0. Containers only.
+      '';
+    };
+    x11 = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Run X11-only apps as DISPLAY=:0 through xwayland-satellite in the
+        guest, on top of the Wayland socket. Needs wayland; the host's X
+        server is never shared.
       '';
     };
     runtime = mkOption {
