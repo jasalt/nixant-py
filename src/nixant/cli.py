@@ -52,7 +52,7 @@ from nixant.project import (
     resolve_mount_sources,
     target_lock,
 )
-from nixant.proxy import command_routes, local_routes, serve, setup_help
+from nixant.proxy import collect_routes, command_routes, local_routes, serve, setup_help
 from nixant.readiness import wait_ready
 from nixant.run import Runner, check_host_tools
 
@@ -626,6 +626,12 @@ def status(
         )
     if not states:
         typer.echo(f"{target or 'project'}: not created")
+    instance_routes = {state.name: collect_routes([state])[0] for state in states}
+    host_routes = (
+        collect_routes(provider.find({PREFIX + "managed": "true"}))[0]
+        if any(instance_routes.values())
+        else {}
+    )
     for state in states:
         recorded_target = state.config.get(PREFIX + "target", "")
         check_owner(state, root, recorded_target)
@@ -656,6 +662,14 @@ def status(
             f"({activation}, {current}{mismatch})"
         )
         typer.echo(f"root: {state.config.get(PREFIX + 'root', 'unknown')}")
+        routes = instance_routes[state.name]
+        if routes:
+            typer.echo("proxy routes (configured; reachability not checked):")
+            for hostname, port in routes.items():
+                conflict = (
+                    " [conflict; not routed]" if hostname not in host_routes else ""
+                )
+                typer.echo(f"  {hostname} → 127.0.0.1:{port}{conflict}")
 
 
 def _orphans(provider: IncusProvider) -> None:

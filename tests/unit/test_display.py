@@ -54,6 +54,73 @@ def test_status_absent(display: tuple) -> None:
     display[1].assert_not_called()
 
 
+@pytest.mark.parametrize("target", [[], ["dev"]])
+def test_status_proxy_routes_and_host_conflicts(display: tuple, target: list) -> None:
+    provider, evaluate, root = display
+    state = MachineState(
+        "test-dev",
+        "Running",
+        "container",
+        {
+            **metadata(root, "dev"),
+            PREFIX + "routes": json.dumps(
+                {
+                    "site.localhost": 8101,
+                    "mail.site.localhost": 9101,
+                }
+            ),
+        },
+        {},
+    )
+    other = MachineState(
+        "other-project",
+        "Running",
+        "container",
+        {PREFIX + "routes": '{"site.localhost": 8102}'},
+        {},
+    )
+    provider.find.side_effect = [[state], [state, other]]
+    result = CliRunner().invoke(app, ["status", *target])
+    assert result.exit_code == 0, result.output
+    assert "proxy routes (configured; reachability not checked):" in result.output
+    assert "mail.site.localhost → 127.0.0.1:9101\n" in result.output
+    assert "site.localhost → 127.0.0.1:8101 [conflict; not routed]" in result.output
+    assert "other-project" not in result.output
+    assert provider.find.call_args.args == ({PREFIX + "managed": "true"},)
+    evaluate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "status,routes",
+    [
+        ("Stopped", '{"site.localhost": 8101}'),
+        ("Frozen", '{"site.localhost": 8101}'),
+        ("Running", "invalid"),
+        ("Running", "[]"),
+        ("Running", '{"site.localhost": true}'),
+        ("Running", "{}"),
+    ],
+)
+def test_status_ignores_ineligible_routes(
+    display: tuple, status: str, routes: str
+) -> None:
+    provider, evaluate, root = display
+    provider.find.return_value = [
+        MachineState(
+            "test-dev",
+            status,
+            "container",
+            {**metadata(root, "dev"), PREFIX + "routes": routes},
+            {},
+        )
+    ]
+    result = CliRunner().invoke(app, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "proxy routes" not in result.output
+    provider.find.assert_called_once()
+    evaluate.assert_not_called()
+
+
 def test_config_roundtrip(display: tuple) -> None:
     provider, evaluate, root = display
     runtime = json.loads(
