@@ -101,8 +101,9 @@ def test_status_proxy_routes_and_host_conflicts(display: tuple, target: list) ->
         ("Running", "{}"),
     ],
 )
+@pytest.mark.parametrize("json_output", [False, True])
 def test_status_ignores_ineligible_routes(
-    display: tuple, status: str, routes: str
+    display: tuple, status: str, routes: str, json_output: bool
 ) -> None:
     provider, evaluate, root = display
     provider.find.return_value = [
@@ -114,10 +115,118 @@ def test_status_ignores_ineligible_routes(
             {},
         )
     ]
-    result = CliRunner().invoke(app, ["status"])
+    result = CliRunner().invoke(app, ["status", *(["--json"] if json_output else [])])
     assert result.exit_code == 0, result.output
-    assert "proxy routes" not in result.output
+    if json_output:
+        record = json.loads(result.stdout)["instances"][0]
+        assert record["proxy_routes"] == []
+        assert record["build_status"] == "unknown"
+        assert record["system"] == record["activation"] == "none"
+        assert record["schema_mismatch"] is False
+    else:
+        assert "proxy routes" not in result.output
     provider.find.assert_called_once()
+    evaluate.assert_not_called()
+
+
+@pytest.mark.parametrize("args", [[], ["dev"], ["--orphans"]])
+def test_status_json_empty(display: tuple, args: list) -> None:
+    result = CliRunner().invoke(app, ["status", *args, "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"version": 1, "instances": []}
+    display[1].assert_not_called()
+
+
+def test_status_json_record(display: tuple) -> None:
+    provider, evaluate, root = display
+    state = MachineState(
+        "test-dev",
+        "Running",
+        "container",
+        {
+            **metadata(root, "dev"),
+            PREFIX + "schema": "old",
+            PREFIX + "system": "/nix/store/system",
+            PREFIX + "activation": "degraded",
+            PREFIX + "routes": '{"site.localhost": 8101, "mail.localhost": 9101}',
+        },
+        {},
+        ("10.0.0.2",),
+    )
+    other = MachineState(
+        "other",
+        "Running",
+        "container",
+        {PREFIX + "routes": '{"site.localhost": 8102}'},
+        {},
+    )
+    provider.find.side_effect = [[state], [state, other]]
+    link = gcroot_path(root, "dev")
+    link.parent.mkdir(parents=True)
+    link.symlink_to("/nix/store/system")
+    result = CliRunner().invoke(app, ["status", "dev", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {
+        "version": 1,
+        "instances": [
+            {
+                "name": "test-dev",
+                "target": "dev",
+                "status": "Running",
+                "kind": "container",
+                "ephemeral": False,
+                "ipv4": ["10.0.0.2"],
+                "root": str(root),
+                "override": False,
+                "system": "/nix/store/system",
+                "activation": "degraded",
+                "build_status": "current",
+                "schema": "old",
+                "schema_mismatch": True,
+                "proxy_routes": [
+                    {
+                        "hostname": "mail.localhost",
+                        "upstream_address": "127.0.0.1",
+                        "upstream_port": 9101,
+                        "conflict": False,
+                    },
+                    {
+                        "hostname": "site.localhost",
+                        "upstream_address": "127.0.0.1",
+                        "upstream_port": 8101,
+                        "conflict": True,
+                    },
+                ],
+            }
+        ],
+    }
+    evaluate.assert_not_called()
+
+
+def test_status_json_orphans(display: tuple) -> None:
+    provider, evaluate, root = display
+    provider.find.return_value = [
+        MachineState(
+            "gone", "Stopped", "container", metadata(root / "gone", "dev"), {}
+        ),
+        MachineState("here", "Running", "container", metadata(root, "dev"), {}),
+    ]
+    result = CliRunner().invoke(app, ["status", "--orphans", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {
+        "version": 1,
+        "instances": [
+            {
+                "name": "gone",
+                "status": "Stopped",
+                "target": "dev",
+                "root": str(root / "gone"),
+            }
+        ],
+    }
+    assert (
+        CliRunner().invoke(app, ["status", "dev", "--orphans", "--json"]).exit_code == 2
+    )
     evaluate.assert_not_called()
 
 

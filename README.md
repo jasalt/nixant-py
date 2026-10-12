@@ -122,6 +122,41 @@ Every command takes an optional target name (default `dev`). Without one, `shell
 - `forward GUEST_PORT [HOST_PORT]` adds a temporary loopback proxy device (`nixant-forward-<port>`), for a dev server started by hand, and removes it on Ctrl-C, SIGTERM or the terminal closing. Nothing goes into the configuration, and `up` leaves these devices alone. A forward killed with SIGKILL stays until `incus config device remove local:NAME nixant-forward-<port>`. Containers only, like `ports`.
 - `logs` shows the guest's systemd journal as root, the last 50 lines by default (`-n`), and keeps printing with `-f`. Each `NAME` is a log file declared in `nixant.logs` (`nixant.logs.debug = "/workspace/log/debug.log";`), which `tail` shows, or else a systemd unit (`nixant logs nginx phpfpm-wordpress -f`). Files and units can be mixed. `up` records the declared files on the instance, so `logs` does not evaluate Nix.
 
+## Structured status
+
+`nixant status --json` (or `nixant status TARGET --json`) emits a JSON object
+with `version: 1` and an `instances` array, without evaluating Nix. No matching
+instance is a successful result with an empty array. Errors retain their
+non-zero exit codes and diagnostics go to stderr.
+
+Each instance contains `name`, `target`, `status` (Incus spelling, e.g.
+`Running`), `kind`, `ephemeral`, `ipv4`, `root`, `override` (boolean), `system`,
+`activation`, `build_status` (`current`, `outdated`, or `unknown`), `schema`
+(the recorded string, or `missing`), `schema_mismatch` (boolean), and
+`proxy_routes`. Missing system/activation values are `none`; a missing root
+is `unknown`.
+
+`proxy_routes` is sorted by hostname and contains objects such as:
+
+```json
+{
+  "hostname": "mysite.localhost",
+  "upstream_address": "127.0.0.1",
+  "upstream_port": 8080,
+  "conflict": false
+}
+```
+
+These describe configured routes for running instances only, not proxy health
+or public URLs. `conflict` means another running managed instance claims the
+hostname and the proxy refuses to route it. Stopped instances and missing or
+malformed route metadata yield an empty route array (invalid entries are skipped).
+
+`nixant status --orphans --json` uses the same envelope but returns a compact
+inventory of instances whose checkout is gone: `name`, `status`, `target`, and
+`root` only. It works outside a project and cannot be combined with a target.
+Consumers should tolerate additional fields and not rely on instance ordering.
+
 ## Machine settings
 
 `nixant up` reconciles these outer settings with the instance (and `rebuild` warns when they differ):

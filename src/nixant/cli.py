@@ -607,13 +607,16 @@ def status(
     orphans: bool = typer.Option(
         False, "--orphans", help="List managed instances whose checkout is gone."
     ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print versioned structured status as JSON."
+    ),
 ) -> None:
     """Show metadata and cached build status without evaluating Nix."""
     provider = IncusProvider(ctx.obj["runner"])
     if orphans:
         if target is not None:
             raise UsageError("--orphans lists the whole host; do not pass a target")
-        _orphans(provider)
+        _orphans(provider, json_output=json_output)
         return
     root = discover_project()
     runner = ctx.obj["runner"]
@@ -624,8 +627,9 @@ def status(
         states = provider.find(
             {PREFIX + "managed": "true", PREFIX + "project": project_id(root)}
         )
-    if not states:
+    if not states and not json_output:
         typer.echo(f"{target or 'project'}: not created")
+    records: list[dict[str, Any]] = []
     instance_routes = {state.name: collect_routes([state])[0] for state in states}
     host_routes = (
         collect_routes(provider.find({PREFIX + "managed": "true"}))[0]
@@ -652,6 +656,35 @@ def status(
             if get_override(root, recorded_target, runner) == state.name
             else ""
         )
+        routes = instance_routes[state.name]
+        if json_output:
+            records.append(
+                {
+                    "name": state.name,
+                    "target": recorded_target,
+                    "status": state.status,
+                    "kind": state.kind,
+                    "ephemeral": state.ephemeral,
+                    "ipv4": list(state.ipv4),
+                    "root": state.config.get(PREFIX + "root", "unknown"),
+                    "override": bool(marker),
+                    "system": system,
+                    "activation": activation,
+                    "build_status": current,
+                    "schema": schema,
+                    "schema_mismatch": bool(mismatch),
+                    "proxy_routes": [
+                        {
+                            "hostname": hostname,
+                            "upstream_address": "127.0.0.1",
+                            "upstream_port": port,
+                            "conflict": hostname not in host_routes,
+                        }
+                        for hostname, port in routes.items()
+                    ],
+                }
+            )
+            continue
         typer.echo(
             f"{state.name}{marker}  {state.status.upper()}  "
             f"{'ephemeral ' if state.ephemeral else ''}"
@@ -662,7 +695,6 @@ def status(
             f"({activation}, {current}{mismatch})"
         )
         typer.echo(f"root: {state.config.get(PREFIX + 'root', 'unknown')}")
-        routes = instance_routes[state.name]
         if routes:
             typer.echo("proxy routes (configured; reachability not checked):")
             for hostname, port in routes.items():
@@ -670,15 +702,36 @@ def status(
                     " [conflict; not routed]" if hostname not in host_routes else ""
                 )
                 typer.echo(f"  {hostname} → 127.0.0.1:{port}{conflict}")
+    if json_output:
+        typer.echo(json.dumps({"version": 1, "instances": records}, indent=2))
 
 
-def _orphans(provider: IncusProvider) -> None:
+def _orphans(provider: IncusProvider, *, json_output: bool = False) -> None:
     states = provider.find({PREFIX + "managed": "true"})
     orphans = [
         state
         for state in states
         if not Path(state.config.get(PREFIX + "root", "")).is_dir()
     ]
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "version": 1,
+                    "instances": [
+                        {
+                            "name": state.name,
+                            "status": state.status,
+                            "target": state.config.get(PREFIX + "target", "?"),
+                            "root": state.config.get(PREFIX + "root", "unknown"),
+                        }
+                        for state in orphans
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return
     if not orphans:
         typer.echo("no orphaned instances")
         return
