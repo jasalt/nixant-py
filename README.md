@@ -4,12 +4,12 @@ NixOS development environments on local [Incus](https://linuxcontainers.org/incu
 
 You describe an environment as a `nixosConfiguration` in your project's flake. nixant builds it on the host, transfers the closure into an Incus container and activates it, then gives you a shell inside. The project checkout is mounted into the guest, so editors and tools on the host keep working.
 
-> Status: containers and VMs.
+> Status: Incus system containers are the main focus and the best-tested workflow. VM support is available but less tested; see [Containers and VMs](#containers-and-vms) for limitations.
 
 ## Host requirements
 
 - Linux x86_64.
-- Multi-user Nix with flakes enabled.
+- Multi-user Nix with flakes enabled, plus `git` and the `incus` CLI on `PATH`.
 - Incus with the `local` remote and a default profile that provides a root disk and a NIC.
 - Your user is in the `incus-admin` group. Restricted `incus`-group projects are untested and unsupported.
 - The guest user's UID must equal your host UID, so the shifted workspace mount stays writable.
@@ -93,6 +93,7 @@ Extension modules may read these options. The container and VM modules set `nixa
 ## Workflow
 
 ```console
+$ nixant doctor          # check host requirements (no project needed)
 $ nixant init            # create flake.nix from the default template
 $ nixant up              # build, create/start, transfer, activate (target "dev")
 $ nixant up --dry-run    # build, then show instance changes and the package diff; apply nothing
@@ -100,6 +101,7 @@ $ nixant shell           # login shell in the guest, in the matching directory (
 $ nixant exec -- make    # run one command
 $ nixant logs [-f]       # guest journal; NAME... picks units or nixant.logs files
 $ nixant forward 3000    # 127.0.0.1:3000 to guest port 3000 until Ctrl-C (also: forward GUEST HOST)
+$ nixant proxy           # serve configured hostnames via Caddy; see Hostname proxy below
 $ nixant rebuild         # re-build and always re-activate a running instance (alias: reload)
 $ nixant status          # metadata and cached build state, no evaluation
 $ nixant config          # runtime JSON, project ID, instance name, mount sources
@@ -107,16 +109,18 @@ $ nixant restart         # restart (or start) without re-activating
 $ nixant down [--force]  # stop
 $ nixant destroy         # delete the instance and its host GC root (asks first; -y skips, and is required without a terminal)
 $ nixant snapshot [NAME]  # snapshot (also: snapshots, restore NAME, snapshot NAME --delete)
-$ nixant name [NAME]     # give this checkout its own instance name (git config)
+$ nixant name [TARGET] [NAME] # set a checkout-local name; omit NAME to generate one
 $ nixant adopt           # attach an instance whose checkout moved
 ```
 
-Every command takes an optional target name (default `dev`). Without one, `shell`, `exec` (`-n TARGET`), `up`, `rebuild`, `down`, `restart`, `destroy`, `config`, `snapshot`, `snapshots` and `restore` (`-t TARGET`) use the target whose mount source contains the current directory, the deepest one if mounts nest, so `nixant shell` inside `www/site` enters the instance that mounts `www/site`; they fall back to `dev` outside every mount or when several targets mount the same directory. `up` and `rebuild` find the instance the same way, so the first `up` of a site still needs its name. `shell` and `exec` start where the current directory appears in the guest, `/workspace/public_html` from `www/site/public_html`, and in the target's workdir when the current directory is outside its mounts. When the instance is stopped or frozen, `shell` and `exec` ask on a terminal whether to start it (without re-activating, like `restart`); without a terminal they fail and point to `nixant restart`. This reads the instances' Incus mount devices and does not evaluate Nix. `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation (default 30 minutes).
+Most instance commands take an optional positional target name (default `dev`); `exec` uses `-n/--target`, while `logs`, `forward`, `snapshot`, `snapshots` and `restore` use `-t/--target`. `init` takes a template, not a target. `doctor` and `proxy` are host-wide and need no project; `status` without a target lists all instances for the current project. `name` and `adopt` default to `dev` rather than detecting a target from the current directory.
 
-- `up` and `rebuild` are the only commands that evaluate Nix. `shell`, `exec`, `down`, `destroy` and `status` find the instance by its `user.nixant.*` Incus metadata, so a broken or removed configuration never blocks cleanup.
+Without an explicit target, `shell`, `exec`, `up`, `rebuild`, `down`, `restart`, `destroy`, `config`, `logs`, `forward`, `snapshot`, `snapshots` and `restore` use the target whose mount source contains the current directory, the deepest one if mounts nest, so `nixant shell` inside `www/site` enters the instance that mounts `www/site`; they fall back to `dev` outside every mount or when several targets mount the same directory. `up` and `rebuild` find the instance the same way, so the first `up` of a site still needs its name. `shell` and `exec` start where the current directory appears in the guest, `/workspace/public_html` from `www/site/public_html`, and in the target's workdir when the current directory is outside its mounts. When the instance is stopped or frozen, `shell` and `exec` ask on a terminal whether to start it (without re-activating, like `restart`); without a terminal they fail and point to `nixant restart`. This reads the instances' Incus mount devices and does not evaluate Nix. `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation (default 30 minutes).
+
+- `up` and `rebuild` evaluate and build the guest configuration; `config` evaluates without building, and `name` evaluates when generating a name. `init` also uses Nix to read templates and lock inputs. `shell`, `exec`, `down`, `destroy` and `status` find the instance by its `user.nixant.*` Incus metadata, so a broken or removed configuration never blocks cleanup.
 - `up --dry-run` evaluates and builds, then prints the instance changes `up` would make (or what a new instance would get) and the package diff against the system recorded on the instance (`nix store diff-closures`). It creates, starts, changes and activates nothing, and leaves the host GC root at the deployed system. It exits non-zero when `up` would refuse.
 - `up` skips activation when the instance already runs the built system. `rebuild` never skips, so it is the explicit retry after a failed or degraded activation.
-- `shell` and `exec` need a running instance with at least one completed activation (`ok` or `degraded`). They do not start the instance; run `nixant up` first.
+- `shell` and `exec` need at least one completed activation (`ok` or `degraded`); run `nixant up` first. They can offer to start a stopped instance interactively, but do not build or re-activate it.
 - `status` reports, per instance, the Incus state, IPv4 addresses, activation result, whether the recorded system is `current` or `outdated` against the host GC root, and any schema mismatch. For running instances it also lists configured proxy hostnames and their loopback upstream ports, flagging hostname conflicts with running instances anywhere on the host. These are recorded routes, not verified reachable URLs: the proxy may be stopped, use HTTPS or non-default ports, or run on another host (e.g. outside Lima). No Nix evaluation or service probing is performed.
 - `config` evaluates the target without building and prints JSON.
 - `forward GUEST_PORT [HOST_PORT]` adds a temporary loopback proxy device (`nixant-forward-<port>`), for a dev server started by hand, and removes it on Ctrl-C, SIGTERM or the terminal closing. Nothing goes into the configuration, and `up` leaves these devices alone. A forward killed with SIGKILL stays until `incus config device remove local:NAME nixant-forward-<port>`. Containers only, like `ports`.
@@ -178,16 +182,36 @@ nixant = {
 - The `workspace` mount (project root at `/workspace`) stays in place when you add other mounts; drop it with `nixant.mounts.workspace.enable = false`, or override single keys such as `nixant.mounts.workspace.target = "/code"` or `readOnly = true`.
 - Mounts and ports that disappear from the configuration are removed from the instance.
 
-## Port-less hostnames
+## Hostname proxy
 
-Give a forward a `hostname` (`nixant.ports = [{ host = 8105; guest = 80; hostname = "mysite.localhost"; }]`)
-and run `nixant proxy` on the host to reach it as `http://mysite.localhost`.
-The proxy needs `caddy` on `PATH`, serves only on `127.0.0.1` and `[::1]`, keeps
+Add a hostname to a container's port forward in `nix/dev.nix`:
+
+```nix
+nixant.ports = [
+  { host = 8105; guest = 80; hostname = "mysite.localhost"; }
+];
+```
+
+Then apply it and run the host-side proxy:
+
+```console
+$ nixant up                  # record the route and configure the port forward
+$ nixant proxy --print-setup  # show low-port permission options; makes no changes
+$ nixant proxy               # keep running; visit http://mysite.localhost
+```
+
+The guest service must listen on port 80. `host = 8105` is its forwarded port;
+the proxy's `--port` is a separate HTTP listener. To avoid privileged ports,
+use `nixant proxy --port 8080` and visit `http://mysite.localhost:8080`.
+
+The proxy needs `caddy` on `PATH` and `XDG_RUNTIME_DIR` set. It runs in the
+foreground (Ctrl-C stops it), serves all running managed instances, not just
+the current project, and does not need a project directory. It serves only on
+`127.0.0.1` and `[::1]`, keeps
 its admin API on a Unix socket in `$XDG_RUNTIME_DIR`, and follows the running
 instances in Incus, so routes appear and vanish with `up` and `down`. Unknown
 hosts get a 404, and a hostname claimed by two instances is not routed.
-`--https` also serves `https://mysite.localhost` on 443 with certificates from Caddy's own CA; run `caddy trust` once so browsers accept it (`--https-port` changes the port). Port 80 needs a one-time host change that nixant never makes; `nixant proxy
---print-setup` shows the options, or pass `--port` to use another port.
+`--https` also serves `https://mysite.localhost` on 443 with certificates from Caddy's own CA; run `caddy trust` once so browsers accept it (`--https-port` changes the port). Port 80 needs permission to bind low ports, which nixant never configures; `nixant proxy --print-setup` shows the options, or pass `--port` to use another port.
 
 Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy on the desktop with `nixant proxy --routes-from 'limactl shell default nixant proxy --routes'`; `--routes` prints the route table as JSON and the desktop polls it every few seconds. The desktop needs `caddy` and `nixant`, and Lima's forwards of the sites' ports to the desktop's loopback.
 
@@ -226,15 +250,17 @@ The socket and the render node both give guest code a path into the host; see [s
 
 Violations fail at evaluation time with a message naming the offending option. The profile does not restrict the guest's network access.
 
-The profile reduces the guest's privileges; it is not a sandbox for hostile code. `/workspace` stays writable, including `.git/hooks`, `.git/config` (for example `core.hooksPath` or `core.fsmonitor`) and `.envrc`, and host tools such as git, direnv, editors and nixant's own `git` calls run them as your host user. Review guest-written changes to those files before running host tools in the checkout. [security.md](security.md) describes these and other limits and a hardening order.
+The profile reduces the guest's privileges; it is not a sandbox for hostile code. `/workspace` stays writable, including `.git/hooks`, `.git/config` (for example `core.hooksPath` or `core.fsmonitor`) and `.envrc`, and host tools such as git, direnv, editors and nixant's own `git` calls run them as your host user. Review guest-written changes to those files before running host tools in the checkout. [security.md](docs/security.md) describes these and other limits and a hardening order.
 
 Switching `isolation` back from `"agent"` keeps the 2 CPU and 4 GiB caps on an existing instance, since `null` limits are left alone (see Machine settings). Set `cpus` and `memory` explicitly, or remove the caps with `incus config unset local:NAME limits.cpu limits.memory`.
 
 ## Containers and VMs
 
+Incus system containers are the primary development and testing focus. VMs are supported but less tested, and do not have feature parity with containers.
+
 A target is a container when it imports `nixant.nixosModules.container` and a VM when it imports `nixant.nixosModules.vm` (the stock Incus VM profile with `incus-agent` kept enabled). The kind of an existing instance cannot change; `up` refuses and asks you to destroy it first. VMs use `images:nixos/unstable` with `security.secureboot=false`, and get 180 seconds to become ready.
 
-VM differences, verified on Incus with virtiofs mounts:
+VM behavior and limitations (mount support relies on virtiofs):
 
 - CPU and memory limits and mounts (add, retarget, remove) apply to a running VM.
 - A larger `disk` is stored immediately but the guest only sees it after `nixant restart`.
