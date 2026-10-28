@@ -42,13 +42,16 @@ def optional_metadata(spec: MachineSpec) -> dict[str, str | None]:
 def check_owner(state: MachineState, root: Path, target: str) -> None:
     config = state.config
     if config.get(PREFIX + "managed") != "true":
-        raise NixantError(f"instance {state.name} exists but is not managed by nixant")
+        raise NixantError(
+            f"instance {state.name} exists but is not managed by nixant; "
+            "choose a different nixant.instanceName in .nixant/"
+        )
     if config.get(PREFIX + "project") != project_id(root):
         raise NixantError(
             f"instance {state.name} belongs to "
             f"{config.get(PREFIX + 'root', 'another checkout')}; "
-            f"for a second checkout run `nixant name {target}`, or `nixant adopt` "
-            "if that checkout was moved"
+            "choose a different nixant.instanceName in .nixant/, or run "
+            "`nixant adopt` explicitly if that workspace was moved"
         )
     if config.get(PREFIX + "target") != target:
         raise NixantError(
@@ -105,7 +108,7 @@ def resolve(
             f"target {target}'s instance is {state.name} "
             f"but the {name_source} now names {name}; "
             f"run nixant destroy {target} "
-            "or restore nixant.instanceName/the git override"
+            "or restore nixant.instanceName in .nixant/"
         )
     if state is None:
         state = provider.inspect(name)

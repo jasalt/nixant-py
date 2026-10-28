@@ -57,7 +57,7 @@ def test_up_order(deploy: dict[str, Mock]) -> None:
     result = CliRunner().invoke(app, ["up", "--timeout", "5m"])
     assert result.exit_code == 0, result.output
     calls = [call[0] for call in events.mock_calls]
-    assert calls.index("evaluate") < calls.index("build") < calls.index("resolve")
+    assert calls.index("evaluate") < calls.index("resolve") < calls.index("build")
     assert (
         calls.index("provider.create")
         < calls.index("provider.start")
@@ -580,16 +580,16 @@ def test_up_reuses_an_obsolete_mount_target(
     assert running_deploy["devices"]["unrelated"] == UNRELATED
 
 
-def test_up_uses_git_override_name(
-    deploy: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("command", ["up", "rebuild"])
+def test_name_collision_prevents_build_and_mutation(
+    deploy: dict[str, Mock], command: str
 ) -> None:
-    monkeypatch.setattr("nixant.deploy.get_override", Mock(return_value="shop-mine"))
-    result = CliRunner().invoke(app, ["up"])
-    assert result.exit_code == 0, result.output
-    assert deploy["resolve"].call_args.args[3] == "shop-mine"
-    assert deploy["resolve"].call_args.kwargs["name_source"] == "git override"
-    assert deploy["provider"].create.call_args.args[0].instance_name == "shop-mine"
-    assert deploy["provider"].start.call_args.args == ("shop-mine",)
+    deploy["resolve"].side_effect = NixantError("name belongs to another workspace")
+    result = CliRunner().invoke(app, [command])
+    assert result.exit_code == 1
+    deploy["build"].assert_not_called()
+    deploy["provider"].create.assert_not_called()
+    deploy["provider"].start.assert_not_called()
 
 
 def test_up_without_override_uses_config_name(deploy: dict[str, Mock]) -> None:

@@ -30,7 +30,7 @@ def test_owner_triple(state: MachineState, tmp_path: Path) -> None:
     check_owner(state, tmp_path, "dev")
     with pytest.raises(NixantError, match="belongs to target dev"):
         check_owner(state, tmp_path, "test")
-    with pytest.raises(NixantError, match="second checkout"):
+    with pytest.raises(NixantError, match="different nixant.instanceName"):
         check_owner(state, tmp_path / "other", "dev")
     with pytest.raises(NixantError, match="not managed"):
         check_owner(replace(state, config={}), tmp_path, "dev")
@@ -166,7 +166,7 @@ def test_resolve_table(state: MachineState, tmp_path: Path) -> None:
     provider.inspect.return_value = replace(
         state, config=metadata(tmp_path / "other", "dev")
     )
-    with pytest.raises(NixantError, match="second checkout"):
+    with pytest.raises(NixantError, match="different nixant.instanceName"):
         resolve(provider, tmp_path, "dev", "test-dev", kind="container")
     provider.inspect.return_value = replace(state, config=metadata(tmp_path, "other"))
     with pytest.raises(NixantError, match="belongs to target other"):

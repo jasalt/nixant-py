@@ -28,13 +28,6 @@ from nixant.init import (
     self_path,
 )
 from nixant.models import SCHEMA_VERSION
-from nixant.naming import (
-    get_override,
-    propose,
-    set_override,
-    unset_override,
-    validate_instance_name,
-)
 from nixant.nix.build import gcroot_path
 from nixant.nix.eval import evaluate_spec
 from nixant.ownership import (
@@ -644,7 +637,6 @@ def status(
         _orphans(provider, json_output=json_output)
         return
     root = discover_project()
-    runner = ctx.obj["runner"]
     if target is not None:
         state = lookup(provider, root, target, require_schema=False)
         states = [state] if state else []
@@ -676,11 +668,6 @@ def status(
             if schema != str(SCHEMA_VERSION)
             else ""
         )
-        marker = (
-            " (override)"
-            if get_override(root, recorded_target, runner) == state.name
-            else ""
-        )
         routes = instance_routes[state.name]
         if json_output:
             records.append(
@@ -692,7 +679,7 @@ def status(
                     "ephemeral": state.ephemeral,
                     "ipv4": list(state.ipv4),
                     "root": state.config.get(PREFIX + "root", "unknown"),
-                    "override": bool(marker),
+                    "override": False,
                     "system": system,
                     "activation": activation,
                     "build_status": current,
@@ -711,7 +698,7 @@ def status(
             )
             continue
         typer.echo(
-            f"{state.name}{marker}  {state.status.upper()}  "
+            f"{state.name}  {state.status.upper()}  "
             f"{'ephemeral ' if state.ephemeral else ''}"
             f"{state.kind}  {' '.join(state.ipv4)}"
         )
@@ -780,7 +767,6 @@ def show_config(
     root = discover_project()
     target = _target(ctx, root, target)
     spec = evaluate_spec(root, target, ctx.obj["runner"])
-    override = get_override(root, target, ctx.obj["runner"])
     sources = resolve_mount_sources(
         root, {mount.name: mount.source for mount in spec.mounts}
     )
@@ -790,51 +776,13 @@ def show_config(
                 "runtime": spec.to_runtime(),
                 "projectRoot": str(root),
                 "projectId": project_id(root),
-                "instanceName": override or spec.instance_name,
-                "instanceNameSource": "git override" if override else "config",
+                "instanceName": spec.instance_name,
+                "instanceNameSource": "config",
                 "mountSources": {name: str(path) for name, path in sources.items()},
             },
             indent=2,
         )
     )
-
-
-@app.command()
-def name(
-    ctx: typer.Context,
-    target: str = typer.Argument("dev"),
-    new_name: str | None = typer.Argument(None, metavar="[NAME]"),
-    unset: bool = typer.Option(False, "--unset", help="Remove the override."),
-) -> None:
-    """Give this checkout its own instance name for a target."""
-    root = discover_project()
-    runner = ctx.obj["runner"]
-    if unset and new_name is not None:
-        raise UsageError("pass either NAME or --unset, not both")
-    provider = IncusProvider(runner)
-    with target_lock(root, target):
-        existing = lookup(provider, root, target, require_schema=False)
-        if existing is not None:
-            raise NixantError(
-                f"instance {existing.name} exists for target {target}; "
-                f"destroy it first, or keep the current name"
-            )
-        if unset:
-            scope = unset_override(root, target, runner)
-            typer.echo(
-                f"removed the {scope} override for {target}"
-                if scope
-                else f"no override set for {target}"
-            )
-            return
-        if new_name is None:
-            committed = evaluate_spec(root, target, runner)
-            new_name = propose(committed.instance_name, root)
-        validate_instance_name(new_name)
-        scope = set_override(root, target, new_name, runner)
-        typer.echo(
-            f"{target} now uses instance name {new_name} (git config, {scope} scope)"
-        )
 
 
 @app.command()

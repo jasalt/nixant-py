@@ -11,7 +11,6 @@ import typer
 from nixant.errors import NixantError
 from nixant.incus import IncusProvider
 from nixant.models import MachineSpec, MachineState
-from nixant.naming import get_override
 from nixant.nix.activate import activate, can_skip
 from nixant.nix.build import build
 from nixant.nix.eval import evaluate
@@ -48,8 +47,8 @@ def up(
     spec = desired.spec
     # Fail before building or creating anything the instance cannot take.
     _refuse(validate(spec, host()), "cannot apply configuration")
-    system = build(root, target, desired.drv_path, runner)
     current = _resolve(provider, root, target, desired)
+    system = build(root, target, desired.drv_path, runner)
     state = _converge(provider, root, target, spec, current)
     wait_ready(provider, spec.instance_name, spec.kind, verbose=runner.verbose)
     provider.verify_mounts(spec.instance_name, spec.mounts)
@@ -68,8 +67,8 @@ def dry_run(
     spec = desired.spec
     session = host()
     _refuse(validate(spec, session), "cannot apply configuration")
-    system = build(root, target, desired.drv_path, runner, root_it=False)
     current = _resolve(provider, root, target, desired)
+    system = build(root, target, desired.drv_path, runner, root_it=False)
     if current is None:
         typer.echo(f"would create {spec.kind} {spec.instance_name}")
         state = MachineState(spec.instance_name, "Stopped", spec.kind, {}, {})
@@ -106,8 +105,8 @@ def rebuild(
 ) -> None:
     desired = _desired(root, target, runner)
     spec = desired.spec
-    system = build(root, target, desired.drv_path, runner)
     state = _resolve(provider, root, target, desired)
+    system = build(root, target, desired.drv_path, runner)
     if state is None or state.status != "Running":
         raise NixantError(
             f"instance {spec.instance_name} is not running; run nixant up"
@@ -127,9 +126,6 @@ def rebuild(
 def _desired(root: Path, target: str, runner: Runner) -> Desired:
     evaluated = evaluate(root, target, runner)
     spec = evaluated.spec
-    override = get_override(root, target, runner)
-    if override:
-        spec = replace(spec, instance_name=override)
     if spec.user.uid != os.getuid():
         raise NixantError(
             f"set nixant.user.uid = {os.getuid()}; configured UID is {spec.user.uid}"
@@ -145,7 +141,7 @@ def _desired(root: Path, target: str, runner: Runner) -> Desired:
     )
     for mount in spec.mounts:
         check_mount(mount)
-    return Desired(spec, evaluated.drv_path, "git override" if override else "config")
+    return Desired(spec, evaluated.drv_path, "config")
 
 
 def _resolve(
