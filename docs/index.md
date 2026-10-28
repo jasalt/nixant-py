@@ -2,7 +2,7 @@
 
 NixOS development environments on local [Incus](https://linuxcontainers.org/incus/).
 
-Describe an environment as a `nixosConfiguration` in your project's flake. nixant builds it on the host, transfers the closure into an Incus container, activates it, and provides a shell inside. Your project checkout is mounted into the guest, so host editors and tools keep working.
+Describe an environment as a `nixosConfiguration` in `.nixant/flake.nix`. nixant builds it on the host, transfers the closure into an Incus container, activates it, and provides a shell inside. Your project checkout is mounted into the guest, so host editors and tools keep working.
 
 ## Getting started
 
@@ -20,7 +20,7 @@ nixant up
 nixant shell
 ```
 
-See the [README](../README.md) for host requirements, project setup, templates, commands, and limitations.
+See the [README](../README.md) for host requirements, project setup, templates, commands, and limitations. Existing root-flake projects must [migrate to `.nixant/`](migration.md).
 
 ## How it works
 

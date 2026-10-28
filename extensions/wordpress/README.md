@@ -18,9 +18,9 @@ Status: MVP. One site per instance. See `plan.md` for the design and what comes 
 ## Quick start
 
 ```console
-$ mkdir client-a && cd client-a && git init
-$ nixant init wordpress           # flake.nix, nix/site.nix, .gitignore and flake.lock, added to git
-$ $EDITOR nix/site.nix            # uid, ports
+$ mkdir client-a && cd client-a
+$ nixant init wordpress           # .nixant/flake.nix, .nixant/nix/site.nix, .gitignore, lock
+$ $EDITOR .nixant/nix/site.nix    # uid, ports
 $ nixant up
 ```
 
@@ -30,9 +30,9 @@ When `up` finishes (`... ready`):
 - the Mailpit inbox is at `http://localhost:8025`;
 - `public/` holds the WordPress installation.
 
-`nixant init wordpress` names the instance after the directory (`client-a-dev`) and adds the files to git; `flake.nix` and `nix/site.nix` must stay tracked, as for any nixant project. In a directory that already has a `flake.nix`, it writes nothing and prints the inputs and modules to add by hand.
+`nixant init wordpress` names the instance after the directory (`client-a-dev`) and does not require Git. The environment flake and module are isolated under `.nixant/`; if a legacy root-level `flake.nix` exists, init refuses and points to the [migration guide](../../docs/migration.md). If `.nixant/flake.nix` already exists, it writes nothing and prints the inputs and modules to add by hand.
 
-The project has a single input besides nixpkgs: nixant, which carries both the container module and the WordPress module. To work on nixant itself, lock a project to a local checkout with `nix flake lock --override-input nixant path:/path/to/nixant`, and back to the published one with `nix flake update nixant`.
+The project has a single input besides nixpkgs: nixant, which carries both the container module and the WordPress module. To work on nixant itself, lock a project to a local checkout with `nix flake lock path:$PWD/.nixant --override-input nixant path:/path/to/nixant`, and back to the published one with `nix flake update path:$PWD/.nixant nixant`.
 
 ### An existing site
 
@@ -52,11 +52,11 @@ The template's `.gitignore` keeps the WordPress installation out of git (core, `
 !/public/wp-content/themes/my-theme/
 ```
 
-Ignored files are also invisible to the Nix flake, so the site is never copied into the Nix store. `wp-config.php` stays out of git because setup writes the guest's database settings into it.
+The ignore rules keep generated site content out of Git, but Git ignore rules do not control the Nix source. The site stays out of the Nix store because it is workspace data outside `.nixant/`; `wp-config.php` stays out of Git because setup writes the guest's database settings into it.
 
 ## Configuring the site
 
-`nix/site.nix` holds the nixant settings and a `wordpress` block:
+`.nixant/nix/site.nix` holds the nixant settings and a `wordpress` block:
 
 ```nix
 { ... }:
@@ -192,7 +192,7 @@ tests/                     eval.nix, template.nix, vm.nix, integration.sh
 plan.md                    design and decisions
 ```
 
-`nix/snippets/wordpress.nix` at the repository root is what `nixant init wordpress` prints for an existing `flake.nix`.
+`nix/snippets/wordpress.nix` at the repository root is what `nixant init wordpress` prints when `.nixant/flake.nix` already exists.
 
 ## Limits
 

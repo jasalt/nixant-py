@@ -2,14 +2,14 @@
 
 NixOS development environments on local [Incus](https://linuxcontainers.org/incus/).
 
-You describe an environment as a `nixosConfiguration` in your project's flake. nixant builds it on the host, transfers the closure into an Incus container and activates it, then gives you a shell inside. The project checkout is mounted into the guest, so editors and tools on the host keep working.
+You describe an environment as a `nixosConfiguration` in `.nixant/flake.nix`. nixant evaluates that isolated configuration on the host, transfers the closure into an Incus container and activates it, then gives you a shell inside. The project workspace is mounted into the guest, so editors and tools on the host keep working.
 
 > Status: Incus system containers are the main focus and the best-tested workflow. VM support is available but less tested; see [Containers and VMs](#containers-and-vms) for limitations.
 
 ## Host requirements
 
 - Linux x86_64.
-- Multi-user Nix with flakes enabled, plus `git` and the `incus` CLI on `PATH`.
+- Multi-user Nix with flakes enabled, plus the `incus` CLI on `PATH`. Git is not required by nixant on the host.
 - Incus with the `local` remote and a default profile that provides a root disk and a NIC.
 - Your user is in the `incus-admin` group. Restricted `incus`-group projects are untested and unsupported.
 - The guest user's UID must equal your host UID, so the shifted workspace mount stays writable.
@@ -17,7 +17,7 @@ You describe an environment as a `nixosConfiguration` in your project's flake. n
 
 nixant never changes Incus server configuration.
 
-`nixant doctor` checks these requirements without a project or a Nix evaluation: platform, `incus`/`nix`/`git` on `PATH`, `incus-admin` membership, a reachable Incus daemon, idmapped mounts when Incus reports them, the default profile's root disk and NIC, multi-user Nix and flakes. It warns about what only optional features need (`caddy` for `proxy`, a Wayland session for `wayland`, a render node for `gpu`), and exits non-zero when a requirement fails.
+`nixant doctor` checks these requirements without a project or a Nix evaluation: platform, `incus`/`nix` on `PATH`, `incus-admin` membership, a reachable Incus daemon, idmapped mounts when Incus reports them, the default profile's root disk and NIC, multi-user Nix and flakes. It warns about what only optional features need (`caddy` for `proxy`, a Wayland session for `wayland`, a render node for `gpu`), and exits non-zero when a requirement fails.
 
 ## Running nixant
 
@@ -31,20 +31,20 @@ $ nix profile install github:jasalt/nixant-py # or install `nixant` once
 From a local checkout, use a `path:` reference:
 
 ```console
-$ mkdir ~/shop && cd ~/shop && git init
+$ mkdir ~/shop && cd ~/shop
 $ nix run path:/path/to/nixant -- init
 $ nix run path:/path/to/nixant -- up
 ```
 
-A `path:` build has no git revision, so the generated project points at that build's source and only works on this machine (`init` warns). A plain `/path/to/nixant` from a clean tree instead pins the project to that commit on GitHub, which fails until the commit is pushed. A project keeps the nixant snapshot it was locked to; move it to newer local changes with `nix flake lock --override-input nixant path:/path/to/nixant`.
+A `path:` build has no git revision, so the generated project points at that build's source and only works on this machine (`init` warns). A plain `/path/to/nixant` from a clean tree instead pins the project to that commit on GitHub, which fails until the commit is pushed. A project keeps the nixant snapshot it was locked to; move it to newer local changes with `nix flake lock path:$PWD/.nixant --override-input nixant path:/path/to/nixant`.
 
 ## Project setup
 
-Run `nixant init` in an empty project directory (`nixant init --list` shows the `default`, `node`, `python`, `devenv` and `wordpress` templates). It writes `flake.nix` and `nix/dev.nix` (the `devenv` template also a starter `devenv.nix`, `devenv.yaml` and `.gitignore`; the `wordpress` template `nix/site.nix` and `.gitignore` instead of `nix/dev.nix`), proposes `nixant.instanceName = "<dir>-dev"` (sanitized for Incus, with a warning if that instance already exists), locks the inputs, and stages the files in git when the directory is a work tree. If the lock step fails (for example offline), the files are kept and the exact `nix flake lock` command is printed.
+Run `nixant init` in an empty workspace (`nixant init --list` shows the `default`, `node`, `python`, `devenv` and `wordpress` templates). Environment files go under `.nixant/`: the flake, lockfile and `nix/` modules. The `devenv` template also writes workspace-level `devenv.nix`, `devenv.yaml` and `.gitignore`; the `wordpress` template writes workspace-level `.gitignore`. Init proposes `nixant.instanceName = "<dir>-dev"` (sanitized for Incus), locks the inputs, and does not require or modify Git. If locking fails (for example offline), the files are kept and the exact `nix flake lock` command is printed. Keep generated data and secrets outside `.nixant/`, which is the Nix source. See [migration](docs/migration.md) to move an existing root-flake project.
 
 The generated `nixant` input is `github:jasalt/nixant-py`, and the lock is pinned to the revision the CLI was built from, so project and CLI match. This applies to builds from a clean checkout, such as `nix run github:jasalt/nixant-py`. Dirty-tree builds and the `nix develop` shell have no revision to pin, so they point the input at their own source as a `path:` URL instead; that project only evaluates on this machine, and `init` warns about it. On such builds, setting `NIXANT_FLAKE_URL` (and `NIXANT_REV`) overrides the URL (a clean build always uses its own); `github:`, `gitlab:`, `sourcehut:` and `git+*://` URLs are supported, and anything else is rejected before files are written.
 
-If `flake.nix` already exists, `init` writes nothing and prints a snippet to merge by hand. To set up a target manually, add nixant (and optionally home-manager) as inputs with `inputs.nixpkgs.follows = "nixpkgs"`, then define `nixosConfigurations.dev` using the nixant container module and these options:
+If `.nixant/flake.nix` already exists, `init` writes nothing and prints a snippet to merge by hand. If a legacy root-level `flake.nix` exists without `.nixant/`, init refuses and prints migration guidance. To set up a target manually, add nixant (and optionally home-manager) as inputs with `inputs.nixpkgs.follows = "nixpkgs"`, then define `nixosConfigurations.dev` using the nixant container module and these options:
 
 ```nix
 nixant = {
@@ -94,7 +94,7 @@ Extension modules may read these options. The container and VM modules set `nixa
 
 ```console
 $ nixant doctor          # check host requirements (no project needed)
-$ nixant init            # create flake.nix from the default template
+$ nixant init            # create .nixant/ configuration from the default template
 $ nixant up              # build, create/start, transfer, activate (target "dev")
 $ nixant up --dry-run    # build, then show instance changes and the package diff; apply nothing
 $ nixant shell           # login shell in the guest, in the matching directory (alias: ssh)
@@ -109,15 +109,14 @@ $ nixant restart         # restart (or start) without re-activating
 $ nixant down [--force]  # stop
 $ nixant destroy         # delete the instance and its host GC root (asks first; -y skips, and is required without a terminal)
 $ nixant snapshot [NAME]  # snapshot (also: snapshots, restore NAME, snapshot NAME --delete)
-$ nixant name [TARGET] [NAME] # set a checkout-local name; omit NAME to generate one
 $ nixant adopt           # attach an instance whose checkout moved
 ```
 
-Most instance commands take an optional positional target name (default `dev`); `exec` uses `-n/--target`, while `logs`, `forward`, `snapshot`, `snapshots` and `restore` use `-t/--target`. `init` takes a template, not a target. `doctor` and `proxy` are host-wide and need no project; `status` without a target lists all instances for the current project. `name` and `adopt` default to `dev` rather than detecting a target from the current directory.
+Most instance commands take an optional positional target name (default `dev`); `exec` uses `-n/--target`, while `logs`, `forward`, `snapshot`, `snapshots` and `restore` use `-t/--target`. `init` takes a template, not a target. `doctor` and `proxy` are host-wide and need no project; `status` without a target lists all instances for the current project. `adopt` defaults to `dev` rather than detecting a target from the current directory.
 
 Without an explicit target, `shell`, `exec`, `up`, `rebuild`, `down`, `restart`, `destroy`, `config`, `logs`, `forward`, `snapshot`, `snapshots` and `restore` use the target whose mount source contains the current directory, the deepest one if mounts nest, so `nixant shell` inside `www/site` enters the instance that mounts `www/site`; they fall back to `dev` outside every mount or when several targets mount the same directory. `up` and `rebuild` find the instance the same way, so the first `up` of a site still needs its name. `shell` and `exec` start where the current directory appears in the guest, `/workspace/public_html` from `www/site/public_html`, and in the target's workdir when the current directory is outside its mounts. When the instance is stopped or frozen, `shell` and `exec` ask on a terminal whether to start it (without re-activating, like `restart`); without a terminal they fail and point to `nixant restart`. This reads the instances' Incus mount devices and does not evaluate Nix. `-v/--verbose` prints each external command before it runs. `up` and `rebuild` accept `--timeout 5m` to bound activation (default 30 minutes).
 
-- `up` and `rebuild` evaluate and build the guest configuration; `config` evaluates without building, and `name` evaluates when generating a name. `init` also uses Nix to read templates and lock inputs. `shell`, `exec`, `down`, `destroy` and `status` find the instance by its `user.nixant.*` Incus metadata, so a broken or removed configuration never blocks cleanup.
+- `up` and `rebuild` evaluate and build the guest configuration; `config` evaluates without building. `init` also uses Nix to read templates and lock inputs. `shell`, `exec`, `down`, `destroy` and `status` find the instance by its `user.nixant.*` Incus metadata, so a broken or removed configuration never blocks cleanup.
 - `up --dry-run` evaluates and builds, then prints the instance changes `up` would make (or what a new instance would get) and the package diff against the system recorded on the instance (`nix store diff-closures`). It creates, starts, changes and activates nothing, and leaves the host GC root at the deployed system. It exits non-zero when `up` would refuse.
 - `up` skips activation when the instance already runs the built system. `rebuild` never skips, so it is the explicit retry after a failed or degraded activation.
 - `shell` and `exec` need at least one completed activation (`ok` or `degraded`); run `nixant up` first. They can offer to start a stopped instance interactively, but do not build or re-activate it.
@@ -134,7 +133,7 @@ instance is a successful result with an empty array. Errors retain their
 non-zero exit codes and diagnostics go to stderr.
 
 Each instance contains `name`, `target`, `status` (Incus spelling, e.g.
-`Running`), `kind`, `ephemeral`, `ipv4`, `root`, `override` (boolean), `system`,
+`Running`), `kind`, `ephemeral`, `ipv4`, `root`, `override` (legacy compatibility boolean, always false), `system`,
 `activation`, `build_status` (`current`, `outdated`, or `unknown`), `schema`
 (the recorded string, or `missing`), `schema_mismatch` (boolean), and
 `proxy_routes`. Missing system/activation values are `none`; a missing root
@@ -250,7 +249,7 @@ The socket and the render node both give guest code a path into the host; see [s
 
 Violations fail at evaluation time with a message naming the offending option. The profile does not restrict the guest's network access.
 
-The profile reduces the guest's privileges; it is not a sandbox for hostile code. `/workspace` stays writable, including `.git/hooks`, `.git/config` (for example `core.hooksPath` or `core.fsmonitor`) and `.envrc`, and host tools such as git, direnv, editors and nixant's own `git` calls run them as your host user. Review guest-written changes to those files before running host tools in the checkout. [security.md](docs/security.md) describes these and other limits and a hardening order.
+The profile reduces the guest's privileges; it is not a sandbox for hostile code. `/workspace` stays writable, including `.git/hooks`, `.git/config` (for example `core.hooksPath` or `core.fsmonitor`) and `.envrc`; host tools such as Git, direnv and editors may run hooks or configuration from the checkout as your host user. Review guest-written changes to those files before running host tools in the checkout. [security.md](docs/security.md) describes these and other limits and a hardening order.
 
 Switching `isolation` back from `"agent"` keeps the 2 CPU and 4 GiB caps on an existing instance, since `null` limits are left alone (see Machine settings). Set `cpus` and `memory` explicitly, or remove the caps with `incus config unset local:NAME limits.cpu limits.memory`.
 
@@ -293,7 +292,7 @@ On the host, only the latest build per target has a GC root.
 
 ## Limitations
 
-- Second checkout on the same host: the instance name comes from `nixant.instanceName`, so two checkouts of the same project collide. nixant refuses to operate on an instance owned by another checkout (`instance NAME belongs to /other/checkout`). Run `nixant name dev` in the second checkout to store its own name in that checkout's git config (per worktree in a multi-worktree repository). Only the repository's own config counts: a value in `~/.gitconfig` or system config is ignored with a warning. The override is invisible to Nix, so the guest hostname keeps the committed name.
+- Second checkout on the same host: the instance name comes from `nixant.instanceName`, so two checkouts of the same project may collide. nixant refuses to operate on an instance owned by another checkout (`instance NAME belongs to /other/checkout`). Set a different `nixant.instanceName` in the second checkout's `.nixant/flake.nix`; the configured name is also the guest hostname. See [migration](docs/migration.md) before upgrading a project that used the removed `nixant name` command.
 - Moved checkouts: the instance keeps working under its old record until you run `nixant adopt` in the new location, which rewrites the recorded root and mount sources and re-registers the host GC root under the new checkout (if that registration fails, nothing is changed). Restoring a snapshot taken before the move keeps the mounts in the current checkout; a running instance is stopped for the restore and started again (a running ephemeral one is refused, since stopping deletes it). `nixant status --orphans` lists instances whose checkout no longer exists.
 - Guest `nixos-rebuild switch` is not supported. After the first activation `/etc/nixos/configuration.nix` is a stub that fails with a message pointing back at `nixant rebuild`.
 - nixpkgs 26.05 or newer in the guest. Instances bootstrap from `images:nixos/unstable`, and only 26.05 and unstable images exist. Activating an older release (25.05 and 25.11 were tried) hangs: its `switch-to-configuration` stops `dbus-broker` and then loses its own D-Bus connection. The Nix modules reject older pins at evaluation time.
@@ -306,7 +305,7 @@ $ ruff check . && ruff format --check . && mypy && pytest
 $ nix flake check
 ```
 
-`nix flake check` evaluates every template, `examples/basic` and `examples/devenv-wordpress` through their own `flake.nix` down to the system derivation. The examples are evaluated with the inputs from their committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh them with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` in each example directory. The devenv side of `examples/devenv-wordpress` (`devenv.nix`) is not checked; it is built in the guest. It also runs the WordPress extension's evaluation tests; its VM and Incus tests are opt-in, see [its README](extensions/wordpress/README.md#tests).
+`nix flake check` evaluates every template, `examples/basic/.nixant` and `examples/devenv-wordpress/.nixant` through their isolated flakes down to the system derivation. The examples are evaluated with the inputs from their committed `flake.lock`, whose nixpkgs must match the tool's own lock; after `nix flake update`, refresh them with `nix flake lock --override-input nixpkgs github:NixOS/nixpkgs/<rev>` from each example's `.nixant/` directory. The devenv side of `examples/devenv-wordpress` (`devenv.nix`) is not checked; it is built in the guest. It also runs the WordPress extension's evaluation tests; its VM and Incus tests are opt-in, see [its README](extensions/wordpress/README.md#tests).
 
 Integration tests need a disposable Incus environment. Plain `pytest` only collects `tests/unit`, so name the directory and opt in explicitly:
 

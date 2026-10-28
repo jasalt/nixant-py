@@ -58,24 +58,21 @@ make_client() {
   mkdir -p "$dir/public/wp-content/plugins/it-plugin"
   (
     cd "$dir"
-    git init -q
-    nix flake init -t "path:$nixant_src#wordpress" >/dev/null
-    sed -i "s|nixant-template-url|path:$nixant_src|" flake.nix
+    "$nixant" init wordpress >/dev/null
+    sed -i "s|nixant-template-url|path:$nixant_src|" .nixant/flake.nix
     sed -i \
       -e "s/instanceName = \"nixant-template-dev\"/instanceName = \"$prefix-$client\"/" \
       -e "s/user.uid = 1000/user.uid = $(id -u)/" \
       -e "s/host = 8081;/host = ${ports[$client]};/" \
       -e "s/host = 8025;/host = ${ui_ports[$client]};/" \
       -e "s/title = \"Client site\"/title = \"Client $client\"/" \
-      nix/site.nix
+      .nixant/nix/site.nix
     cat >public/wp-content/plugins/it-plugin/it-plugin.php <<PHP
 <?php
 /* Plugin Name: Integration plugin */
 add_action( 'wp_footer', function () { echo '<!-- it-plugin v1 -->'; } );
 PHP
-    git add -A
-    nix flake lock >/dev/null 2>&1
-    git add -A
+    nix flake lock "path:$dir/.nixant" >/dev/null 2>&1
   )
 }
 

@@ -4,5 +4,5 @@ inputs:
     url: github:cachix/devenv-nixpkgs/rolling
 
 # Fail instead of moving a service to the next free port: the nixant port
-# forwards in flake.nix point at the ports in ports.nix.
+# forwards in .nixant/flake.nix point at ports in .nixant/ports.nix.
 strict_ports: true
