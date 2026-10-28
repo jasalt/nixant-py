@@ -120,12 +120,16 @@ def main(
     ctx.obj["runner"] = Runner(verbose=verbose)
 
 
+def _version_string() -> str:
+    revision = os.environ.get("NIXANT_REV", "")
+    suffix = f" ({revision[:12]})" if revision else " (revision unavailable)"
+    return f"nixant 0.1.0{suffix}"
+
+
 @app.command()
 def version() -> None:
     """Print the nixant version and source revision, when available."""
-    revision = os.environ.get("NIXANT_REV", "")
-    suffix = f" ({revision[:12]})" if revision else " (revision unavailable)"
-    typer.echo(f"nixant 0.1.0{suffix}")
+    typer.echo(_version_string())
 
 
 # A stuck switch-to-configuration never returns on its own (nixant-1va.3).
@@ -616,6 +620,7 @@ def proxy(
 @app.command("doctor")
 def doctor_command(ctx: typer.Context) -> None:
     """Check the host requirements, without a project or Nix evaluation."""
+    typer.echo(_version_string())
     if not doctor.report(doctor.checks(ctx.obj["runner"]), typer.echo):
         raise typer.Exit(1)
 

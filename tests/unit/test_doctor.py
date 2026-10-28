@@ -55,6 +55,7 @@ def run() -> tuple[int, str]:
 def test_healthy_host(host: dict[str, object]) -> None:
     code, output = run()
     assert code == 0, output
+    assert output.splitlines()[0].startswith("nixant 0.1.0 (")
     assert "ok    incus: Incus 7.4, storage btrfs" in output
     assert "ok    gpu: /dev/dri/renderD128" in output
     assert "warn  wayland: not available; only nixant.wayland needs it" in output
