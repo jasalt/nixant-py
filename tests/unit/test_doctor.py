@@ -62,6 +62,17 @@ def test_healthy_host(host: dict[str, object]) -> None:
     assert "fail" not in output
 
 
+def test_git_is_not_required(
+    host: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        doctor.shutil, "which", lambda tool: None if tool == "git" else f"/bin/{tool}"
+    )
+    code, output = run()
+    assert code == 0, output
+    assert "ok    tools: incus and nix on PATH" in output
+
+
 def test_missing_tools_are_reported_not_raised(
     host: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import REPO, git
+from .conftest import REPO
 
 pytestmark = pytest.mark.integration
 
@@ -61,7 +61,6 @@ def nix_shim(directory: Path, head: str) -> Path:
 
 def init(package: Path, root: Path, shim: Path) -> subprocess.CompletedProcess[str]:
     root.mkdir()
-    git(root, "init", "-q")
     # The package wrapper must set NIXANT_*, and a dev shell's PYTHONPATH
     # would make the packaged CLI import the working tree instead of itself.
     env = {
@@ -82,11 +81,7 @@ def init(package: Path, root: Path, shim: Path) -> subprocess.CompletedProcess[s
 
 
 def lock_nodes(root: Path) -> dict:
-    return dict(json.loads((root / "flake.lock").read_text())["nodes"])
-
-
-def staged(root: Path) -> list[str]:
-    return run("git", "diff", "--cached", "--name-only", cwd=root).split()
+    return dict(json.loads((root / ".nixant/flake.lock").read_text())["nodes"])
 
 
 def test_clean_build_pins_the_project_to_its_revision(tmp_path: Path) -> None:
@@ -96,7 +91,7 @@ def test_clean_build_pins_the_project_to_its_revision(tmp_path: Path) -> None:
     result = init(package, tmp_path / "project", tmp_path / "shim")
     root = tmp_path / "project"
 
-    assert f'nixant.url = "{CANONICAL}";' in (root / "flake.nix").read_text()
+    assert f'nixant.url = "{CANONICAL}";' in (root / ".nixant/flake.nix").read_text()
     argv = json.loads(log.read_text())
     assert argv[argv.index("--override-input") + 1 :][:2] == [
         "nixant",
@@ -108,7 +103,7 @@ def test_clean_build_pins_the_project_to_its_revision(tmp_path: Path) -> None:
     assert nodes["nixant"]["locked"]["rev"] == head
     assert nodes["nixant"]["inputs"]["nixpkgs"] == ["nixpkgs"]
     assert nodes["nixpkgs"]["locked"]["rev"] == nixpkgs_rev()
-    assert "flake.lock" in staged(root)
+    assert not (root / ".git").exists()
 
 
 def test_dirty_build_points_the_project_at_its_own_source(tmp_path: Path) -> None:
@@ -127,8 +122,10 @@ def test_dirty_build_points_the_project_at_its_own_source(tmp_path: Path) -> Non
     found = re.search(r"NIXANT_SELF='(/nix/store/[^']+)'", wrapper)
     assert found is not None, wrapper
     self_store = found[1]
-    assert f'nixant.url = "path:{self_store}";' in (root / "flake.nix").read_text()
-    assert json.loads(log.read_text()) == ["flake", "lock"]
+    assert (
+        f'nixant.url = "path:{self_store}";' in (root / ".nixant/flake.nix").read_text()
+    )
+    assert json.loads(log.read_text()) == ["flake", "lock", f"path:{root}/.nixant"]
     assert "locked inputs" in result.stdout
     assert f"nixant.url is path:{self_store}" in result.stderr
     nodes = lock_nodes(root)
@@ -136,4 +133,4 @@ def test_dirty_build_points_the_project_at_its_own_source(tmp_path: Path) -> Non
     assert nodes["nixant"]["locked"]["path"] == self_store
     assert "rev" not in nodes["nixant"]["locked"]
     assert nodes["nixpkgs"]["locked"]["rev"] == nixpkgs_rev()
-    assert "flake.lock" in staged(root)
+    assert not (root / ".git").exists()

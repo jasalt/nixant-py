@@ -259,8 +259,7 @@ def running(pattern: str) -> bool:
 
 def test_broken_config_does_not_block_cleanup(project: Project) -> None:
     project.nixant("up")
-    (project.root / "nix/dev.nix").write_text("{ this is not nix\n")
-    git(project.root, "add", "nix/dev.nix")
+    (project.root / ".nixant/nix/dev.nix").write_text("{ this is not nix\n")
     assert project.nixant("up", check=False).returncode != 0
     assert project.incus_config("user.nixant.activation") == "ok"
     # status, down and destroy never evaluate the configuration.
@@ -272,8 +271,7 @@ def test_broken_config_does_not_block_cleanup(project: Project) -> None:
 
 
 def test_syntax_error_creates_nothing(project: Project) -> None:
-    (project.root / "nix/dev.nix").write_text("{ this is not nix\n")
-    subprocess.run(["git", "add", "nix/dev.nix"], cwd=project.root, check=True)
+    (project.root / ".nixant/nix/dev.nix").write_text("{ this is not nix\n")
     result = project.nixant("up", check=False)
     assert result.returncode != 0
     assert not project.instance_exists()
@@ -284,9 +282,8 @@ def test_syntax_error_creates_nothing(project: Project) -> None:
 def test_cross_target_same_instance_name(tmp_path: Path) -> None:
     project = new_project(tmp_path, "cross")
     try:
-        flake = project.root / "flake.nix"
+        flake = project.root / ".nixant/flake.nix"
         flake.write_text(with_second_target(flake.read_text()))
-        subprocess.run(["git", "add", "flake.nix"], cwd=project.root, check=True)
         project.nixant("up", "dev")
         clash = project.nixant("up", "other", check=False)
         assert clash.returncode != 0
@@ -304,9 +301,8 @@ def test_cross_target_distinct_names_coexist(tmp_path: Path) -> None:
     other = f"{project.instance}-o"
     project.created.append(other)
     try:
-        flake = project.root / "flake.nix"
+        flake = project.root / ".nixant/flake.nix"
         flake.write_text(with_second_target(flake.read_text(), other))
-        git(project.root, "add", "flake.nix")
         project.nixant("up", "dev")
         project.nixant("up", "other")
         assert project.instance_exists() and project.instance_exists(other)
@@ -434,7 +430,7 @@ def test_adopt_after_checkout_moves(project: Project, tmp_path: Path) -> None:
     new.nixant("destroy", "--yes")
 
 
-def test_name_override_gives_second_checkout_its_own_instance(
+def test_configured_name_gives_second_checkout_its_own_instance(
     project: Project, tmp_path: Path
 ) -> None:
     project.nixant("up")
@@ -449,10 +445,11 @@ def test_name_override_gives_second_checkout_its_own_instance(
     second = replace(project, root=clone)
     clash = second.nixant("up", check=False)
     assert clash.returncode != 0
-    assert "nixant name dev" in clash.stderr + clash.stdout
+    assert "different nixant.instanceName" in clash.stderr + clash.stdout
     chosen = f"{project.instance}-b"
     second.created[:] = [chosen]
-    second.nixant("name", "dev", chosen)
+    config = clone / ".nixant/flake.nix"
+    config.write_text(config.read_text().replace(project.instance, chosen))
     second.nixant("up")
     assert second.instance_exists(chosen)
     assert project.instance_exists()
@@ -471,16 +468,16 @@ def test_linked_worktree_lifecycle_and_orphans(
     second = replace(project, root=linked)
     clash = second.nixant("up", check=False)
     assert clash.returncode != 0
-    assert "nixant name dev" in clash.stderr + clash.stdout
+    assert "different nixant.instanceName" in clash.stderr + clash.stdout
 
     chosen = f"{project.instance}-w"
     project.created.append(chosen)
-    named = second.nixant("name", "dev", chosen)
-    assert "worktree scope" in named.stdout
+    config = linked / ".nixant/flake.nix"
+    config.write_text(config.read_text().replace(project.instance, chosen))
     second.nixant("up")
-    assert second.exec("hostname").stdout.strip() == project.instance
+    assert second.exec("hostname").stdout.strip() == chosen
     assert second.incus_config("user.nixant.root", chosen) == str(linked.resolve())
-    assert f"{chosen} (override)" in second.nixant("status").stdout
+    assert chosen in second.nixant("status").stdout
     # The main worktree keeps its committed name and its own instance.
     assert "(override)" not in project.nixant("status").stdout
     assert project.exec("true").returncode == 0

@@ -109,7 +109,7 @@ def test_pipe_consumer_failure_terminates_producer() -> None:
 
 def test_missing_host_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", "")
-    with pytest.raises(NixantError, match="incus, nix, git"):
+    with pytest.raises(NixantError, match="incus, nix"):
         check_host_tools()
 
 

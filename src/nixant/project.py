@@ -1,26 +1,42 @@
-"""Checkout discovery, evaluation pre-flight, and host-side target locks."""
+"""Workspace discovery, isolated configuration sources, and host-side locks."""
 
 import fcntl
 import hashlib
 import os
 import re
-import shlex
-import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from nixant.errors import NixantError, UsageError
-from nixant.run import Runner
+
+
+def config_directory(root: Path) -> Path:
+    """Configuration source; the workspace remains the ownership identity."""
+    return root / ".nixant"
+
+
+def flake_reference(root: Path) -> str:
+    """Force path semantics, even inside a larger Git work tree."""
+    return "path:" + quote(str(config_directory(root).resolve()), safe="/")
 
 
 def discover_project(start: Path | None = None) -> Path:
-    """Find the nearest enclosing flake, resolving symlink aliases first."""
+    """Find the nearest enclosing .nixant/flake.nix, resolving symlink aliases."""
     directory = (start if start is not None else Path.cwd()).resolve()
+    legacy = None
     for candidate in (directory, *directory.parents):
-        if (candidate / "flake.nix").is_file():
+        if (config_directory(candidate) / "flake.nix").is_file():
             return candidate
-    raise NixantError("no flake.nix found in this directory or its parents")
+        if legacy is None and (candidate / "flake.nix").is_file():
+            legacy = candidate
+    if legacy is not None:
+        raise NixantError(
+            f"found root-level flake at {legacy}; migrate the environment "
+            "configuration to .nixant/ (see docs/migration.md)"
+        )
+    raise NixantError("no .nixant/flake.nix found; run nixant init in the workspace")
 
 
 def project_id(root: Path) -> str:
@@ -34,56 +50,14 @@ def validate_target(target: str) -> str:
 
 
 def resolve_mount_sources(root: Path, sources: Mapping[str, str]) -> dict[str, Path]:
-    """Resolve all sources before any Incus mutation; files are valid mounts too."""
-    resolved: dict[str, Path] = {}
+    """Mount strings are relative to the workspace, never the config directory."""
+    paths: dict[str, Path] = {}
     for name, source in sources.items():
         path = (root / source).resolve()
         if not path.exists():
             raise NixantError(f"nixant.mounts.{name}.source does not exist: {path}")
-        resolved[name] = path
-    return resolved
-
-
-def in_git_work_tree(root: Path, runner: Runner) -> bool:
-    result = runner.run(
-        ["git", "rev-parse", "--is-inside-work-tree"],
-        cwd=root,
-        capture=True,
-        capture_stderr=True,
-        check=False,
-    )
-    return result.returncode == 0 and result.stdout.strip() == b"true"
-
-
-def evaluation_preflight(root: Path, runner: Runner) -> None:
-    """Warn once per invocation; callers invoke once before each evaluation."""
-    if not in_git_work_tree(root, runner):
-        print(
-            "warning: outside a git work tree, Nix will copy the entire directory "
-            "into the store on every evaluation; consider git init",
-            file=sys.stderr,
-        )
-        return
-    result = runner.run(
-        [
-            "git",
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            "--",
-            "*.nix",
-            "flake.lock",
-        ],
-        cwd=root,
-        capture=True,
-    )
-    paths = [os.fsdecode(path) for path in result.stdout.split(b"\0") if path]
-    if paths:
-        print("warning: Nix ignores files not tracked by git:", file=sys.stderr)
-        for path in paths:
-            print(f"  {shlex.quote(path)}", file=sys.stderr)
-        print(f"run: {shlex.join(['git', 'add', '--', *paths])}", file=sys.stderr)
+        paths[name] = path
+    return paths
 
 
 def state_directory() -> Path:

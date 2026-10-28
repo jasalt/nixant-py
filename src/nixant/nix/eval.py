@@ -8,7 +8,7 @@ from pathlib import Path
 from nixant.errors import NixantError, UsageError
 from nixant.models import MachineSpec
 from nixant.nix.store import is_drv_path
-from nixant.project import evaluation_preflight, validate_target
+from nixant.project import config_directory, flake_reference, validate_target
 from nixant.run import Runner
 
 
@@ -41,7 +41,6 @@ def _evaluate(
     root: Path, target: str, runner: Runner, *, with_derivation: bool
 ) -> tuple[MachineSpec, object]:
     validate_target(target)
-    evaluation_preflight(root, runner)
     print(f"evaluating {target}…", file=sys.stderr, flush=True)
     # Apply to the configuration set so missing targets and missing modules can
     # be diagnosed in the same evaluation, without guessing from Nix stderr.
@@ -55,8 +54,15 @@ def _evaluate(
         + "}"
     )
     result = runner.run(
-        ["nix", "eval", "--json", ".#nixosConfigurations", "--apply", expression],
-        cwd=root,
+        [
+            "nix",
+            "eval",
+            "--json",
+            f"{flake_reference(root)}#nixosConfigurations",
+            "--apply",
+            expression,
+        ],
+        cwd=config_directory(root),
         capture=True,
     )
     try:

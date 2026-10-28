@@ -3,7 +3,9 @@
 import json
 import os
 import shlex
+import shutil
 import sys
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -11,7 +13,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from nixant.errors import CommandError, NixantError, UsageError
 from nixant.incus import IncusProvider
 from nixant.naming import sanitize
-from nixant.project import in_git_work_tree
+from nixant.project import config_directory, flake_reference
 from nixant.run import Runner
 
 NAME_MARKER = "nixant-template-dev"
@@ -149,56 +151,63 @@ def init_project(
     if environ.get("NIXANT_FLAKE_URL") and environ.get("NIXANT_REV"):
         pin_url(url, environ["NIXANT_REV"])  # fail before writing anything
 
-    if (directory / "flake.nix").exists():
+    config = config_directory(directory)
+    if not (config / "flake.nix").exists() and (directory / "flake.nix").exists():
+        raise NixantError(
+            "root-level flake.nix exists; migrate its environment configuration "
+            "to .nixant/ first (see docs/migration.md)"
+        )
+    if (config / "flake.nix").exists():
         snippet = flake / "nix/snippets" / f"{template}.nix"
         if not snippet.is_file():
             raise NixantError(f"template {template!r} has no snippet")
-        print("flake.nix already exists; nothing was written.")
+        print(".nixant/flake.nix already exists; nothing was written.")
         print("Add the following by hand:\n")
         print(render(snippet.read_text(), name, url), end="")
         _warn_if_local(url)
         return
 
-    before = _files(directory)
-    runner.run(
-        ["nix", "flake", "init", "-t", f"path:{flake}#{template}"], cwd=directory
-    )
-    created = sorted(_files(directory) - before)
-    for relative in created:
-        path = directory / relative
-        if path.suffix != ".nix":
-            continue
-        text = path.read_text()
-        rendered = render(text, name, url)
-        if rendered != text:
-            path.write_text(rendered)
-    names = [str(path) for path in created]
+    # Stage the template outside any Git work tree. Only configuration files
+    # enter .nixant; devenv files and runtime ignore rules belong to the workspace.
+    with tempfile.TemporaryDirectory(prefix="nixant-init-") as temporary:
+        staged = Path(temporary)
+        runner.run(
+            ["nix", "flake", "init", "-t", f"path:{flake}#{template}"], cwd=staged
+        )
+        files = sorted(_files(staged))
+        destinations = {
+            relative: (
+                config
+                if relative.parts[0] in {"flake.nix", "flake.lock", "nix"}
+                else directory
+            )
+            / relative
+            for relative in files
+        }
+        for destination in destinations.values():
+            if destination.exists() or destination.is_symlink():
+                raise NixantError(f"refusing to overwrite {destination}")
+        for relative, destination in destinations.items():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source = staged / relative
+            if source.suffix == ".nix":
+                destination.write_text(render(source.read_text(), name, url))
+            else:
+                shutil.copyfile(source, destination)
+    names = [str(path.relative_to(directory)) for path in destinations.values()]
     print(f"wrote {' '.join(names)} (instanceName: {name})")
     _warn_if_local(url)
-
-    tracked = in_git_work_tree(directory, runner)
-    if tracked:
-        runner.run(["git", "add", "--", *names], cwd=directory)
-    else:
-        print(
-            "warning: outside a git work tree, Nix will copy the entire directory "
-            "into the store on every evaluation; consider git init",
-            file=sys.stderr,
-        )
     _lock(directory, runner, environ, url)
-    if tracked and (directory / "flake.lock").exists():
-        runner.run(["git", "add", "--", "flake.lock"], cwd=directory)
-        print(f"added to git: {' '.join([*names, 'flake.lock'])}")
 
     try:
         existing = provider.inspect(name)
     except NixantError:
         existing = None
     if existing is not None:
-        print(
-            f"warning: an Incus instance named {name} already exists; "
-            "edit nixant.instanceName in flake.nix before `nixant up`",
-            file=sys.stderr,
+        raise NixantError(
+            f"an Incus instance named {name} already exists; "
+            "choose a different nixant.instanceName in .nixant/flake.nix "
+            "before running nixant up (configuration was written)"
         )
     print("next: nixant up")
 
@@ -218,7 +227,7 @@ def _lock(
     directory: Path, runner: Runner, environ: Mapping[str, str], url: str
 ) -> None:
     revision = environ.get("NIXANT_REV", "")
-    command = ["nix", "flake", "lock"]
+    command = ["nix", "flake", "lock", flake_reference(directory)]
     pinned = bool(environ.get("NIXANT_FLAKE_URL")) and bool(revision)
     if pinned:
         command += ["--override-input", "nixant", pin_url(url, revision)]
@@ -229,7 +238,7 @@ def _lock(
             file=sys.stderr,
         )
     try:
-        runner.run(command, cwd=directory)
+        runner.run(command, cwd=config_directory(directory))
     except CommandError:
         print(
             "warning: could not lock inputs; later run: " + shlex.join(command),

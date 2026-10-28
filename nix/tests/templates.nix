@@ -3,7 +3,7 @@ let
   lib = nixpkgs.lib;
   # Call a shipped flake.nix the way Nix does, with the inputs a lock gives it.
   callFlake = src: inputs:
-    let outputs = (import "${src}/flake.nix").outputs ({ self = outputs // { outPath = src; }; } // inputs);
+    let outputs = (import (src + "/flake.nix")).outputs ({ self = outputs // { outPath = src; }; } // inputs);
     in outputs;
   lockedInput = lock: name: lock.nodes.${lock.nodes.root.inputs.${name}};
   rootLock = lib.importJSON ../../flake.lock;
@@ -20,13 +20,13 @@ let
       templates.${name}.config.environment.systemPackages;
   # The shipped example with its own lock: nixpkgs must be the tool's pin, and
   # home-manager comes from the locked revision with nixpkgs followed.
-  exampleSrc = ../../examples/basic;
+  exampleSrc = ../../examples/basic/.nixant;
   exampleLock = lib.importJSON (exampleSrc + "/flake.lock");
   exampleInputs = (import (exampleSrc + "/flake.nix")).inputs;
   homeManager = callFlake (builtins.fetchTree (lockedInput exampleLock "home-manager").locked) { inherit nixpkgs; };
   example = (callFlake exampleSrc { inherit nixpkgs nixant; home-manager = homeManager; }).nixosConfigurations.dev.config;
   # The devenv WordPress example: evaluated only, no golden runtime.
-  wordpressSrc = ../../examples/devenv-wordpress;
+  wordpressSrc = ../../examples/devenv-wordpress/.nixant;
   wordpressLock = lib.importJSON (wordpressSrc + "/flake.lock");
   wordpress = (callFlake wordpressSrc { inherit nixpkgs nixant; }).nixosConfigurations.dev.config;
   wordpressPorts = import (wordpressSrc + "/ports.nix");
@@ -46,7 +46,7 @@ let
     devenvFiles = lib.all (file: builtins.pathExists (../templates/devenv + "/${file}"))
       [ "devenv.nix" "devenv.yaml" ".gitignore" ];
     exampleEvaluates = example.nixant.runtime.instanceName == "shop-dev";
-    exampleGolden = example.nixant.runtime == lib.importJSON (exampleSrc + "/runtime.json");
+    exampleGolden = example.nixant.runtime == lib.importJSON ../../examples/basic/runtime.json;
     exampleBuilds = builds example;
     exampleAssertions = lib.all (item: item.assertion) example.assertions;
     exampleHomeManager = example.home-manager.users.dev.programs.git.enable;
@@ -56,7 +56,7 @@ let
     exampleLockedFollows = (lockedInput exampleLock "nixant").inputs.nixpkgs == [ "nixpkgs" ]
       && (lockedInput exampleLock "home-manager").inputs.nixpkgs == [ "nixpkgs" ];
     wordpressEvaluates = wordpress.nixant.runtime.instanceName == "devenv-wordpress-dev";
-    wordpressPorts = wordpress.nixant.runtime.ports == map (port: { host = port; guest = port; address = "127.0.0.1"; })
+    wordpressPorts = wordpress.nixant.runtime.ports == map (port: { host = port; guest = port; address = "127.0.0.1"; hostname = null; })
       [ wordpressPorts.http wordpressPorts.mailpit ];
     wordpressDevenv = lib.any (p: (p.pname or "") == "devenv") wordpress.environment.systemPackages;
     wordpressBuilds = builds wordpress;

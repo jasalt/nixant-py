@@ -27,8 +27,6 @@ def runtime() -> dict:
 def runner_with(data: object) -> Mock:
     runner = Mock(spec=Runner)
     runner.run.side_effect = [
-        subprocess.CompletedProcess([], 0, b"true\n"),
-        subprocess.CompletedProcess([], 0, b""),
         subprocess.CompletedProcess([], 0, json.dumps(data).encode()),
     ]
     return runner
@@ -86,7 +84,9 @@ def test_single_evaluation(
     calls = [call for call in runner.run.call_args_list if call.args[0][0] == "nix"]
     assert len(calls) == 1
     assert "drvPath = c.system.build.toplevel.drvPath" in calls[0].args[0][-1]
-    assert calls[0].kwargs == {"cwd": tmp_path, "capture": True}
+    assert calls[0].kwargs == {"cwd": tmp_path / ".nixant", "capture": True}
+    assert calls[0].args[0][3] == f"path:{tmp_path}/.nixant#nixosConfigurations"
+    assert len(runner.run.call_args_list) == 1
     assert "evaluating dev" in capsys.readouterr().err
 
 
@@ -237,8 +237,6 @@ def test_runtime_roundtrip_with_ports_and_readonly_mount(runtime: dict) -> None:
 def test_evaluate_rejects_malformed_response(tmp_path: Path, raw: bytes) -> None:
     runner = runner_with(None)
     runner.run.side_effect = [
-        subprocess.CompletedProcess([], 0, b"true\n"),
-        subprocess.CompletedProcess([], 0, b""),
         subprocess.CompletedProcess([], 0, raw),
     ]
     with pytest.raises(NixantError, match="invalid Nix evaluation response"):

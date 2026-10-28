@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -60,30 +61,31 @@ def test_input_url_prefers_canonical(tmp_path: Path) -> None:
 
 
 def fake_runner(
-    directory: Path, lock_fails: bool = False, *, in_git: bool = True
+    directory: Path,
+    lock_fails: bool = False,
+    *,
+    in_git: bool = True,
+    template_name: str = "default",
 ) -> Mock:
     runner = Mock(spec=Runner)
 
     def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         if argv[:3] == ["nix", "eval", "--json"]:
             return subprocess.CompletedProcess(
-                argv, 0, json.dumps({"default": "d"}).encode()
+                argv, 0, json.dumps({template_name: "d"}).encode()
             )
         if argv[:3] == ["nix", "flake", "init"]:
-            (directory / "nix").mkdir()
-            template = REPO / "nix/templates/default"
-            (directory / "flake.nix").write_text((template / "flake.nix").read_text())
-            (directory / "nix/dev.nix").write_text(
-                (template / "nix/dev.nix").read_text()
+            template = REPO / (
+                "extensions/wordpress/template"
+                if template_name == "wordpress"
+                else f"nix/templates/{template_name}"
             )
+            shutil.copytree(template, kwargs["cwd"], dirs_exist_ok=True)
         if argv[:3] == ["nix", "flake", "lock"]:
             if lock_fails:
                 raise CommandError(argv, 1)
-            (directory / "flake.lock").write_text("{}")
-        if argv[:2] == ["git", "rev-parse"]:
-            return subprocess.CompletedProcess(
-                argv, 0 if in_git else 128, b"true\n" if in_git else b""
-            )
+            (directory / ".nixant/flake.lock").write_text("{}")
+        assert argv[0] != "git"
         return subprocess.CompletedProcess(argv, 0, b"")
 
     runner.run.side_effect = run
@@ -109,15 +111,17 @@ def test_init_writes_rewrites_locks_and_stages(
     runner = fake_runner(project)
     env = {"NIXANT_SELF": str(REPO), "NIXANT_REV": ""}
     init_project(project, "default", runner, provider, env)
-    flake = (project / "flake.nix").read_text()
+    flake = (project / ".nixant/flake.nix").read_text()
     assert 'nixant.instanceName = "shop-dev";' in flake
     assert f'nixant.url = "path:{REPO}";' in flake
     assert "nixant-template" not in flake
-    assert ["git", "add", "--", "flake.nix", "nix/dev.nix"] in commands(runner)
-    assert ["nix", "flake", "lock"] in commands(runner)
-    assert ["git", "add", "--", "flake.lock"] in commands(runner)
+    assert ["nix", "flake", "lock", f"path:{project}/.nixant"] in commands(runner)
+    assert not any(argv[0] == "git" for argv in commands(runner))
     captured = capsys.readouterr()
-    assert "wrote flake.nix nix/dev.nix (instanceName: shop-dev)" in captured.out
+    assert (
+        "wrote .nixant/flake.nix .nixant/nix/dev.nix (instanceName: shop-dev)"
+        in captured.out
+    )
     assert "next: nixant up" in captured.out
     assert "not to this CLI" not in captured.err
     assert f"nixant.url is path:{REPO}" in captured.err
@@ -141,11 +145,12 @@ def test_init_pins_revision_with_canonical_url(
         "nix",
         "flake",
         "lock",
+        f"path:{tmp_path}/.nixant",
         "--override-input",
         "nixant",
         "github:o/r/abc",
     ] in commands(runner)
-    assert 'nixant.url = "github:o/r";' in (tmp_path / "flake.nix").read_text()
+    assert 'nixant.url = "github:o/r";' in (tmp_path / ".nixant/flake.nix").read_text()
     assert "only evaluates on this machine" not in capsys.readouterr().err
 
 
@@ -162,7 +167,7 @@ def test_url_override_without_revision_warns(
     init_project(
         tmp_path, "default", runner, Mock(inspect=Mock(return_value=None)), env
     )
-    assert ["nix", "flake", "lock"] in commands(runner)
+    assert ["nix", "flake", "lock", f"path:{tmp_path}/.nixant"] in commands(runner)
     assert "not to this CLI" in capsys.readouterr().err
 
 
@@ -177,7 +182,7 @@ def test_init_offline_prints_lock_command(
         Mock(inspect=Mock(return_value=None)),
         {"NIXANT_SELF": str(REPO)},
     )
-    assert (tmp_path / "flake.nix").exists()
+    assert (tmp_path / ".nixant/flake.nix").exists()
     assert "later run: nix flake lock" in capsys.readouterr().err
     assert ["git", "add", "--", "flake.lock"] not in commands(runner)
 
@@ -187,10 +192,14 @@ def test_init_warns_when_instance_exists(
 ) -> None:
     provider = Mock()
     provider.inspect.return_value = MachineState("x", "Running", "container", {}, {})
-    init_project(
-        tmp_path, "default", fake_runner(tmp_path), provider, {"NIXANT_SELF": str(REPO)}
-    )
-    assert "already exists" in capsys.readouterr().err
+    with pytest.raises(NixantError, match="already exists"):
+        init_project(
+            tmp_path,
+            "default",
+            fake_runner(tmp_path),
+            provider,
+            {"NIXANT_SELF": str(REPO)},
+        )
     provider.inspect.assert_called_once_with(
         f"{tmp_path.name.lower()}-dev".replace("_", "-").replace(".", "-")
     )
@@ -199,10 +208,11 @@ def test_init_warns_when_instance_exists(
 def test_init_existing_flake_prints_snippet(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (tmp_path / "flake.nix").write_text("{}")
+    (tmp_path / ".nixant").mkdir()
+    (tmp_path / ".nixant/flake.nix").write_text("{}")
     runner = fake_runner(tmp_path)
     init_project(tmp_path, "default", runner, Mock(), {"NIXANT_SELF": str(REPO)})
-    assert (tmp_path / "flake.nix").read_text() == "{}"
+    assert (tmp_path / ".nixant/flake.nix").read_text() == "{}"
     assert not any(c[:3] == ["nix", "flake", "init"] for c in commands(runner))
     captured = capsys.readouterr()
     out = captured.out
@@ -266,11 +276,11 @@ def test_init_outside_git_locks_without_staging(
     if incus_unavailable:
         provider.inspect.side_effect = NixantError("Incus unavailable")
     init_project(tmp_path, "default", runner, provider, {"NIXANT_SELF": str(REPO)})
-    assert (tmp_path / "flake.lock").is_file()
-    assert "nixant-template" not in (tmp_path / "flake.nix").read_text()
+    assert (tmp_path / ".nixant/flake.lock").is_file()
+    assert "nixant-template" not in (tmp_path / ".nixant/flake.nix").read_text()
     assert not any(argv[:2] == ["git", "add"] for argv in commands(runner))
     output = capsys.readouterr()
-    assert "outside a git work tree" in output.err
+    assert "outside a git work tree" not in output.err
     assert "next: nixant up" in output.out
     assert "added to git" not in output.out
 
@@ -350,3 +360,61 @@ def test_hosted_pin_drops_conflicting_selectors(
 ) -> None:
     pinned = pin_url(f"{scheme}:o/r{query}", "a" * 40)
     assert pinned == f"{scheme}:o/r/{'a' * 40}{kept}"
+
+
+@pytest.mark.parametrize(
+    "template", ["default", "node", "python", "devenv", "wordpress"]
+)
+def test_template_config_and_runtime_boundaries(tmp_path: Path, template: str) -> None:
+    # Existing workspaces may contain many repositories and arbitrary data.
+    (tmp_path / "project-a/.git").mkdir(parents=True)
+    (tmp_path / "secret").write_text("not a build input")
+    runner = fake_runner(tmp_path, template_name=template)
+    init_project(
+        tmp_path,
+        template,
+        runner,
+        Mock(inspect=Mock(return_value=None)),
+        {"NIXANT_SELF": str(REPO)},
+    )
+    config = tmp_path / ".nixant"
+    assert (config / "flake.nix").is_file()
+    assert (config / "nix").is_dir()
+    assert not (config / "secret").exists()
+    assert not (config / "project-a").exists()
+    assert not (tmp_path / "flake.nix").exists()
+    assert (tmp_path / "secret").read_text() == "not a build input"
+    if template == "devenv":
+        assert (tmp_path / "devenv.nix").is_file()
+        assert (tmp_path / "devenv.yaml").is_file()
+        assert not (config / "devenv.nix").exists()
+    if template in {"devenv", "wordpress"}:
+        assert (tmp_path / ".gitignore").is_file()
+        assert not (config / ".gitignore").exists()
+
+
+def test_init_refuses_legacy_without_writing(tmp_path: Path) -> None:
+    (tmp_path / "flake.nix").write_text("{}")
+    with pytest.raises(NixantError, match="migrate"):
+        init_project(
+            tmp_path,
+            "default",
+            fake_runner(tmp_path),
+            Mock(),
+            {"NIXANT_SELF": str(REPO)},
+        )
+    assert not (tmp_path / ".nixant").exists()
+
+
+def test_init_never_overwrites_runtime_files(tmp_path: Path) -> None:
+    (tmp_path / "devenv.nix").write_text("keep me")
+    with pytest.raises(NixantError, match="refusing to overwrite"):
+        init_project(
+            tmp_path,
+            "devenv",
+            fake_runner(tmp_path, template_name="devenv"),
+            Mock(),
+            {"NIXANT_SELF": str(REPO)},
+        )
+    assert (tmp_path / "devenv.nix").read_text() == "keep me"
+    assert not (tmp_path / ".nixant").exists()

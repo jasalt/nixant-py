@@ -17,7 +17,7 @@ from nixant.errors import CommandError, NixantError
 
 def check_host_tools() -> None:
     """Use host tools rather than wrapping clients from a different installation."""
-    missing = [tool for tool in ("incus", "nix", "git") if shutil.which(tool) is None]
+    missing = [tool for tool in ("incus", "nix") if shutil.which(tool) is None]
     if missing:
         raise NixantError(f"required tools not found on PATH: {', '.join(missing)}")
 

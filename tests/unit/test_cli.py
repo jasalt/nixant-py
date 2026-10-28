@@ -58,4 +58,4 @@ def test_commands_still_check_host_tools(
     """A --help after exec's command belongs to the guest command."""
     result = CliRunner().invoke(app, arguments)
     assert result.exit_code == 1
-    assert "required tools not found on PATH: incus, nix, git" in result.output
+    assert "required tools not found on PATH: incus, nix" in result.output

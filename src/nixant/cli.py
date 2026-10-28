@@ -40,6 +40,7 @@ from nixant.ownership import (
 )
 from nixant.planner import FORWARD_PREFIX, AddDevice, Change, Effect, RemoveDevice
 from nixant.project import (
+    config_directory,
     discover_project,
     project_id,
     resolve_mount_sources,
@@ -172,7 +173,7 @@ def init(
     template: str = typer.Argument(DEFAULT_TEMPLATE),
     list_: bool = typer.Option(False, "--list", help="List available templates."),
 ) -> None:
-    """Create flake.nix and a role module in the current directory."""
+    """Create .nixant/ configuration for the current workspace."""
     runner = ctx.obj["runner"]
     if list_:
         print_templates(list_templates(self_path(os.environ), runner))
@@ -775,6 +776,7 @@ def show_config(
             {
                 "runtime": spec.to_runtime(),
                 "projectRoot": str(root),
+                "configRoot": str(config_directory(root)),
                 "projectId": project_id(root),
                 "instanceName": spec.instance_name,
                 "instanceNameSource": "config",

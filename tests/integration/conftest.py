@@ -61,15 +61,14 @@ class Project:
         return self.nixant("exec", "--", *command, check=check)
 
     def write_module(self, text: str, name: str = "extra") -> None:
-        """Add a NixOS module to the target; Nix only sees tracked files."""
-        path = self.root / "nix" / f"{name}.nix"
+        """Add an untracked NixOS module to the isolated source."""
+        path = self.root / ".nixant/nix" / f"{name}.nix"
         path.write_text(text)
-        flake = (self.root / "flake.nix").read_text()
+        flake = (self.root / ".nixant/flake.nix").read_text()
         reference = f"./nix/{name}.nix"
         if reference not in flake:
             flake = flake.replace("./nix/dev.nix", f"./nix/dev.nix {reference}", 1)
-            (self.root / "flake.nix").write_text(flake)
-        git(self.root, "add", "--", "flake.nix", f"nix/{name}.nix")
+            (self.root / ".nixant/flake.nix").write_text(flake)
 
     def incus_config(self, key: str, instance: str | None = None) -> str:
         return incus(
@@ -119,7 +118,7 @@ def new_project(tmp_path: Path, label: str, *, vm: bool = False) -> Project:
     instance = f"nixit-{secrets.token_hex(3)}"
     project = Project(root, instance)
     project.nixant("init")
-    flake = (root / "flake.nix").read_text()
+    flake = (root / ".nixant/flake.nix").read_text()
     flake = re.sub(
         r'nixant\.instanceName = "[^"]*";',
         f'nixant.instanceName = "{instance}";',
@@ -130,7 +129,7 @@ def new_project(tmp_path: Path, label: str, *, vm: bool = False) -> Project:
     pinned = os.environ.get("NIXANT_IT_NIXPKGS")
     if pinned:  # e.g. github:NixOS/nixpkgs/nixos-26.05 to check the supported minimum
         flake = re.sub(r'nixpkgs\.url = "[^"]*";', f'nixpkgs.url = "{pinned}";', flake)
-    (root / "flake.nix").write_text(flake)
+    (root / ".nixant/flake.nix").write_text(flake)
     project.write_module(f"{{ nixant.user.uid = {os.getuid()}; }}\n", name="extra")
     return project
 

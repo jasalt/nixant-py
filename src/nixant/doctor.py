@@ -27,11 +27,11 @@ class Check:
 
 def checks(runner: Runner) -> Iterator[Check]:
     yield _platform()
-    missing = [tool for tool in ("incus", "nix", "git") if shutil.which(tool) is None]
+    missing = [tool for tool in ("incus", "nix") if shutil.which(tool) is None]
     yield (
         Check("fail", "tools", f"not found on PATH: {', '.join(missing)}")
         if missing
-        else Check("ok", "tools", "incus, nix and git on PATH")
+        else Check("ok", "tools", "incus and nix on PATH")
     )
     yield _incus_admin()
     if "incus" not in missing:

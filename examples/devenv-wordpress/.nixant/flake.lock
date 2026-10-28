@@ -7,14 +7,18 @@
         ]
       },
       "locked": {
-        "path": "../..",
-        "type": "path"
+        "lastModified": 1793172754,
+        "narHash": "sha256-W/sFzuwQr8giEqcx6FifK6V0m9CqNk8hMwMlPjEQL1A=",
+        "owner": "jasalt",
+        "repo": "nixant-py",
+        "rev": "ded27c2e8a87b641d48413f0147633789eccbf53",
+        "type": "github"
       },
       "original": {
-        "path": "../..",
-        "type": "path"
-      },
-      "parent": []
+        "owner": "jasalt",
+        "repo": "nixant-py",
+        "type": "github"
+      }
     },
     "nixpkgs": {
       "locked": {

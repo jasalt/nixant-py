@@ -3,7 +3,7 @@
 # and the MariaDB data.
 { pkgs, lib, config, ... }:
 let
-  ports = import ./ports.nix;
+  ports = import ./.nixant/ports.nix;
   root = "${config.devenv.root}/wordpress";
   url = "http://localhost:${toString ports.http}";
   db = { name = "wordpress"; user = "wordpress"; password = "wordpress"; port = 3306; };

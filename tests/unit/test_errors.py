@@ -53,4 +53,4 @@ def test_startup_check_and_help(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = CliRunner().invoke(probe, ["noop"])
     assert result.exit_code == 1
-    assert "incus, nix, git" in result.output
+    assert "incus, nix" in result.output
