@@ -1,0 +1,435 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="NixOS development environments on local Incus.">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="zensical-0.0.23">
+    
+    
+      
+        <title>Migrate a project to .nixant/ - nixant</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../assets/stylesheets/modern/main.1e989742.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,a=__md_scope)=>JSON.parse(t.getItem(a.pathname+"."+e)),__md_set=(e,t,a=localStorage,_=__md_scope)=>{try{a.setItem(_.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#migrate-a-project-to-nixant" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="./.." title="nixant" class="md-header__button md-logo" aria-label="nixant" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            nixant
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Migrate a project to .nixant/
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+    </div>
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="./.." title="nixant" class="md-nav__button md-logo" aria-label="nixant" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    nixant
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="./.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#before-you-move-the-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before you move the files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#move-the-environment-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Move the environment configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#source-boundary-and-git" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source boundary and Git
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+<h1 id="migrate-a-project-to-nixant">Migrate a project to <code>.nixant/</code><a class="headerlink" href="#migrate-a-project-to-nixant" title="Permanent link">&para;</a></h1>
+<p>Current nixant releases discover environment configuration in the nearest
+<code>.nixant/flake.nix</code>. Root-level project flakes are no longer a supported nixant
+layout. This is a manual, one-time move; do not run <code>nixant init</code> over an
+existing root-level environment and expect it to migrate automatically.</p>
+<h2 id="before-you-move-the-files">Before you move the files<a class="headerlink" href="#before-you-move-the-files" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Stop any nixant operation for the workspace and back up the workspace and
+   <code>flake.lock</code>.</li>
+<li>Keep the workspace at its current absolute path while migrating. nixant's
+   ownership identity, target locks, and mount roots are based on the workspace
+   path, not on the configuration directory. Moving the workspace changes that
+   identity; use <code>nixant adopt</code> only when you intentionally move a workspace.</li>
+<li>For every target, identify the <em>effective</em> instance name currently in use.
+   If the old <code>nixant name</code> command was used, its value was stored in Git config
+   as <code>nixant.&lt;target&gt;.instanceName</code> and was not visible to Nix. Copy that value
+   into the target's Nix configuration before upgrading. For example, inspect
+   repository-local config with:</li>
+</ol>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>config<span class="w"> </span>--local<span class="w"> </span>--get-all<span class="w"> </span>nixant.dev.instanceName
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>config<span class="w"> </span>--worktree<span class="w"> </span>--get-all<span class="w"> </span>nixant.dev.instanceName
+</span></code></pre></div>
+<p>The old worktree command may report an error when worktree config was never
+   enabled. Check all targets that had overrides, and use the value shown by
+   the old <code>nixant config</code> or <code>nixant status</code> when in doubt. Put the active
+   value in that target's configuration as <code>nixant.instanceName = "...";</code>.
+   For example, if the <code>dev</code> target was named <code>shop-work</code>, preserve that exact
+   name in the module that defines <code>nixosConfigurations.dev</code>:</p>
+<div class="language-nix highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>nixant<span class="o">.</span><span class="ss">instanceName</span> <span class="o">=</span> <span class="s2">"shop-work"</span><span class="p">;</span>
+</span></code></pre></div>
+<p>Do this before the first <code>up</code> with the new release. Keeping the workspace
+   path and each existing instance name unchanged lets nixant recognize and
+   reuse the existing instances. If the configured name differs, nixant will
+   refuse rather than silently retarget or replace an instance. To intentionally
+   rename, explicitly destroy the old instance first (this deletes its
+   guest-only data), then create the new one.</p>
+<h2 id="move-the-environment-configuration">Move the environment configuration<a class="headerlink" href="#move-the-environment-configuration" title="Permanent link">&para;</a></h2>
+<p>From the workspace root, move the flake and its configuration modules into the
+isolated source. Keep runtime/project files such as application code, databases,
+secrets, and caches at the workspace root.</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>.nixant
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>mv<span class="w"> </span>flake.nix<span class="w"> </span>.nixant/
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-f<span class="w"> </span>flake.lock<span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span><span class="w"> </span>mv<span class="w"> </span>flake.lock<span class="w"> </span>.nixant/<span class="p">;</span><span class="w"> </span><span class="k">fi</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-d<span class="w"> </span>nix<span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span><span class="w"> </span>mv<span class="w"> </span>nix<span class="w"> </span>.nixant/<span class="p">;</span><span class="w"> </span><span class="k">fi</span>
+</span></code></pre></div>
+<p>The paths from <code>flake.nix</code> to modules moved with <code>nix/</code> stay the same (for
+example <code>./nix/dev.nix</code>). Other files imported using relative Nix paths must
+also be moved into <code>.nixant/</code> and their references kept within that source, or
+restructured as explicit flake inputs. Nix evaluates the configuration as an
+explicit path source; references to arbitrary files elsewhere in the workspace
+are not a way to bring the whole workspace into the store.</p>
+<p>Mounts are separate: keep <code>nixant.mounts.&lt;name&gt;.source</code> as a <strong>string</strong> resolved
+from the workspace root, not as a Nix path. For example:</p>
+<div class="language-nix highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>nixant<span class="o">.</span>mounts<span class="o">.</span>workspace<span class="o">.</span><span class="ss">source</span> <span class="o">=</span> <span class="s2">"."</span><span class="p">;</span>
+</span></code></pre></div>
+<p>The source remains the checkout root even though the flake now lives in
+<code>.nixant/</code>. Existing string mount paths therefore remain workspace-relative.</p>
+<p>Then refresh the lock from the isolated source:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>nix<span class="w"> </span>flake<span class="w"> </span>lock<span class="w"> </span><span class="s2">"path:</span><span class="nv">$PWD</span><span class="s2">/.nixant"</span>
+</span></code></pre></div>
+<p>A lock made for the old root can contain relative path inputs that no longer
+resolve after the move. Review the refreshed <code>.nixant/flake.lock</code>; use explicit
+remote inputs for shared dependencies. To test or develop against a local nixant
+checkout, override the input explicitly:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>nix<span class="w"> </span>flake<span class="w"> </span>lock<span class="w"> </span><span class="s2">"path:</span><span class="nv">$PWD</span><span class="s2">/.nixant"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--override-input<span class="w"> </span>nixant<span class="w"> </span><span class="s2">"path:/absolute/path/to/nixant"</span>
+</span></code></pre></div>
+<p>The override is local to this lock operation; update the flake's nixant input
+URL as appropriate if the project should persistently use that source. Nix
+commands run directly for this project (for example <code>nix flake check</code>) should
+run from <code>.nixant/</code>, or name that directory as the flake source.</p>
+<h2 id="source-boundary-and-git">Source boundary and Git<a class="headerlink" href="#source-boundary-and-git" title="Permanent link">&para;</a></h2>
+<p>nixant evaluates <code>.nixant/</code> with an explicit <code>path:</code> reference, even when the
+workspace is inside a Git repository. Files elsewhere in the workspace,
+sibling repositories, and Git's tracked/untracked-file rules do not widen or
+filter that source. All ordinary files placed inside <code>.nixant/</code> are potential
+Nix build inputs and can be copied into the Nix store. Keep credentials,
+secrets, generated data, caches, and runtime content outside <code>.nixant/</code>.</p>
+<p>A Git repository is no longer required by nixant: initialization does not stage
+files, evaluation does not require tracked files, and <code>nixant doctor</code> no longer
+requires Git on the host. This does not remove Git requirements of your own Nix
+inputs or tools; those are governed by the inputs and software you choose.</p>
+<h2 id="verify">Verify<a class="headerlink" href="#verify" title="Permanent link">&para;</a></h2>
+<p>Install/use the new nixant release, then check discovery and evaluation before
+changing the running instance:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>nixant<span class="w"> </span>doctor
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>nixant<span class="w"> </span>config
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>nixant<span class="w"> </span>up<span class="w"> </span>--dry-run
+</span></code></pre></div>
+<p><code>nixant config</code> should show the original workspace root and the intended
+<code>instanceName</code>. A dry run does not apply changes. Once the configuration and
+name are correct, run <code>nixant up</code> to reconcile the existing instance.</p>
+<p>If you have not moved a legacy project yet, <code>nixant</code> reports that it found a
+root-level flake and points here; it will not initialize a replacement over
+that layout.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      
+      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":[],"search":"../assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.5fcf0de6.min.js"></script>
+      
+    
+  </body>
+</html>
