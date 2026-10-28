@@ -8,6 +8,7 @@ __pycache__/
 dist/
 /result
 /result-*
+/site/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
