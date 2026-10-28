@@ -111,10 +111,21 @@ def main(
 ) -> None:
     """Manage local NixOS development environments."""
     # doctor reports missing tools itself.
-    if not ctx.meta.get("nixant.help") and ctx.invoked_subcommand != "doctor":
+    if not ctx.meta.get("nixant.help") and ctx.invoked_subcommand not in {
+        "doctor",
+        "version",
+    }:
         check_host_tools()
     ctx.ensure_object(dict)
     ctx.obj["runner"] = Runner(verbose=verbose)
+
+
+@app.command()
+def version() -> None:
+    """Print the nixant version and source revision, when available."""
+    revision = os.environ.get("NIXANT_REV", "")
+    suffix = f" ({revision[:12]})" if revision else " (revision unavailable)"
+    typer.echo(f"nixant 0.1.0{suffix}")
 
 
 # A stuck switch-to-configuration never returns on its own (nixant-1va.3).
@@ -551,6 +562,11 @@ def proxy(
         False, "--https", help="Also serve HTTPS with Caddy's internal CA."
     ),
     https_port: int = typer.Option(443, "--https-port", help="Port for --https."),
+    https_to_http: bool = typer.Option(
+        False,
+        "--https-to-http",
+        help="Redirect matching HTTPS requests to their HTTP URLs (requires --https).",
+    ),
     print_setup: bool = typer.Option(
         False, "--print-setup", help="Show how to allow binding the port, then exit."
     ),
@@ -570,6 +586,8 @@ def proxy(
     Runs Caddy on 127.0.0.1 and [::1] only and keeps its routes in step with
     Incus. It changes nothing on the host; --print-setup explains port 80.
     """
+    if https_to_http and not https:
+        raise UsageError("--https-to-http requires --https")
     if print_setup:
         typer.echo(setup_help(port, https_port if https else None))
         return
@@ -583,6 +601,7 @@ def proxy(
             lambda: command_routes(argv),
             port=port,
             https_port=https_port if https else None,
+            https_to_http=https_to_http,
             watch_incus=False,
         )
         return
@@ -590,6 +609,7 @@ def proxy(
         lambda: local_routes(provider),
         port=port,
         https_port=https_port if https else None,
+        https_to_http=https_to_http,
     )
 
 

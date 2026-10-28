@@ -23,6 +23,19 @@ def test_unknown_command_is_usage_error() -> None:
     assert result.exit_code == 2
 
 
+def test_version_includes_build_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NIXANT_REV", "0123456789abcdef")
+    result = CliRunner().invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "nixant 0.1.0 (0123456789ab)"
+
+
+def test_version_without_revision() -> None:
+    result = CliRunner().invoke(app, ["version"], env={"NIXANT_REV": ""})
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "nixant 0.1.0 (revision unavailable)"
+
+
 @pytest.fixture
 def no_host_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("nixant.run.shutil.which", lambda tool: None)
