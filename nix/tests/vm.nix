@@ -21,7 +21,7 @@ let
       config.systemd.network.networks."10-nic".matchConfig.Name == "en*" &&
       config.systemd.network.networks."10-nic".networkConfig.DHCP == "ipv4";
     user = config.users.users.dev.uid == 1000 &&
-      builtins.elem "wheel" config.users.users.dev.extraGroups;
+      !(builtins.elem "wheel" config.users.users.dev.extraGroups);
     flakes = builtins.elem "flakes" config.nix.settings.experimental-features;
     staleGuard = lib.hasInfix "rm -f /etc/nixos/configuration.nix /etc/nixos/incus.nix"
       config.system.activationScripts.nixant-stale-config.text;

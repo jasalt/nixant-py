@@ -389,7 +389,7 @@ def wayland_device(connect: str) -> dict[str, str]:
 
 
 def test_wayland_adds_a_proxy_to_the_session_socket(spec: MachineSpec) -> None:
-    spec = replace(spec, wayland=True)
+    spec = replace(spec, wayland=True, desktop_mode="direct")
     current = state(devices={"nixant-mount-workspace": MOUNT})
     changes = plan(spec, current, Host("/run/user/1000/wayland-1"))
     wanted = wayland_device("unix:/run/user/1000/wayland-1")
@@ -404,6 +404,28 @@ def test_wayland_adds_a_proxy_to_the_session_socket(spec: MachineSpec) -> None:
     ]
 
 
+def test_nested_wayland_protects_upstream_socket(spec: MachineSpec) -> None:
+    spec = replace(spec, wayland=True, desktop_mode="nested")
+    current = state(devices={"nixant-mount-workspace": MOUNT})
+    (change,) = plan(spec, current, Host("/run/user/1000/wayland-1"))
+    assert isinstance(change.action, AddDevice)
+    assert change.action.values["uid"] == "0"
+    assert change.action.values["gid"] == "0"
+    assert change.action.values["mode"] == "0600"
+    assert change.action.values["security.uid"] == "1000"
+    assert change.action.values["security.gid"] == "1000"
+
+
+def test_direct_to_nested_changes_socket_owner(spec: MachineSpec) -> None:
+    spec = replace(spec, wayland=True, desktop_mode="nested")
+    devices = {
+        "nixant-mount-workspace": MOUNT,
+        "nixant-wayland": wayland_device("unix:/run/user/1000/wayland-1"),
+    }
+    (change,) = plan(spec, state(devices=devices))
+    assert change.action == SetDevice("nixant-wayland", {"uid": "0", "gid": "0"})
+
+
 def test_wayland_without_a_session_uses_the_first_socket(spec: MachineSpec) -> None:
     spec = replace(spec, wayland=True)
     current = state(devices={"nixant-mount-workspace": MOUNT})
@@ -415,7 +437,7 @@ def test_wayland_without_a_session_uses_the_first_socket(spec: MachineSpec) -> N
 def test_wayland_without_a_session_keeps_the_recorded_socket(
     spec: MachineSpec,
 ) -> None:
-    spec = replace(spec, wayland=True)
+    spec = replace(spec, wayland=True, desktop_mode="direct")
     devices = {
         "nixant-mount-workspace": MOUNT,
         "nixant-wayland": wayland_device("unix:/run/user/1000/wayland-1"),

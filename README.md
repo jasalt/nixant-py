@@ -49,7 +49,7 @@ If `.nixant/flake.nix` already exists, `init` writes nothing and prints a snippe
 ```nix
 nixant = {
   instanceName = "shop-dev";   # required: Incus instance name and guest hostname
-  user = { name = "dev"; uid = 1000; sudo = true; };
+  user = { name = "dev"; uid = 1000; sudo = false; };
   mounts.workspace = { source = "/abs/path/to/checkout"; target = "/workspace"; };
   # workdir defaults to the workspace target, else the user's home
 };
@@ -216,7 +216,17 @@ Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy
 
 ## Wayland windows
 
-`nixant.wayland = true` shows guest windows on the host desktop. `up` adds a `nixant-wayland` proxy device that connects to the compositor socket of the session it runs in (`$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`) and listens in the guest on `/dev/nixant-wayland-0`, owned by the guest user with mode `0600`. The proxy connects to the host as your user, not as root. The guest module links that socket to `$XDG_RUNTIME_DIR/wayland-0` and sets `WAYLAND_DISPLAY=wayland-0` and `NIXOS_OZONE_WL=1`, so Electron and Chromium use Wayland too. It also enables lingering for the user, because `shell` and `exec` open no login session that would create `/run/user/<uid>`.
+`nixant.wayland = true` runs a private **nested Weston desktop inside the container**, presenting its applications in one host window. `nixant.desktop.mode = "nested"` is the default; set it to `"direct"` to show application windows individually on the host instead. Optional `nixant.desktop.width` and `height` default to 1440 and 900.
+
+`up` adds a `nixant-wayland` proxy from the current host session (`$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`) to `/dev/nixant-wayland-0` in the guest. In nested mode this upstream socket is **root:root, 0600**. The root-managed `nixant-weston.service` is its client; applications cannot connect to it. The proxy still connects to the host as your host user, not root.
+
+Weston exposes `/run/nixant-desktop/wayland-0` as **root:dev, 0660**, in a root-owned directory that dev cannot modify (the group follows `nixant.user.name`). Root's runtime directory remains private. The user's `$XDG_RUNTIME_DIR/wayland-0` links to this downstream socket. In direct mode it links to the upstream proxy instead, which is then owned by dev. Both modes set `WAYLAND_DISPLAY=wayland-0`, `NIXOS_OZONE_WL=1`, and enable user lingering for `shell`/`exec` sessions.
+
+Weston uses an immutable configuration, no terminal launchers, and a restricted system service. Start applications through `nixant exec` or `nixant shell` as dev—not as root. The desktop stays open with no applications; container shutdown stops it. Closing the desktop window or losing the host display causes Weston to restart, **not** to preserve existing application connections. This is not an attach/detach desktop.
+
+Nested mode rejects `nixant.user.sudo = true`, wheel membership, and Nix trusted users other than root. Removing sudo alone is insufficient: trusted Nix users are effectively privileged. Custom sudo rules, privileged groups/services, writable host configuration, and additional socket mounts can still defeat isolation; this is not a sandbox for hostile code.
+
+**Migration:** update the host CLI alongside the module (runtime schema v2 makes older CLIs refuse the configuration). After applying to an existing privileged/direct container, restart it to discard old root processes, supplementary groups, and open upstream display connections. Review custom privilege grants and host socket mounts. A configuration switch cannot revoke already-open connections.
 
 - The proxy looks the socket up on each new connection, so it keeps working after you log out and in again, as long as the compositor keeps the same socket name.
 - When `up` runs without `WAYLAND_DISPLAY` (for example over ssh), an existing device keeps the socket it recorded. A new one gets `/run/user/<uid>/wayland-0` and `up` prints a warning.
@@ -241,7 +251,9 @@ The socket and the render node both give guest code a path into the host; see [s
 
 ## Agent isolation
 
-`nixant.isolation = "agent"` restricts the guest for autonomous coding agents:
+The default dev user has no sudo, wheel membership, or trusted-Nix access. Administrative work remains available from the host using `incus exec local:NAME -- COMMAND`; `nixant up`/`rebuild` still activate configuration as root through Incus. For an explicitly privileged environment, set `nixant.user.sudo = true` (requires direct mode if Wayland is enabled).
+
+`nixant.isolation = "agent"` additionally restricts the guest for autonomous coding agents:
 
 - no passwordless sudo, no `wheel` membership, and the user is not a trusted Nix user;
 - only the `workspace` mount may be writable (other mounts must set `readOnly = true`), and host ports may only be forwarded on `127.0.0.1` (the default `address`), so a service in the guest can be reached from the host but not from the network;
@@ -285,7 +297,7 @@ These settings are host-wide and shared with unrelated instances, so nixant leav
 Each activation adds a system profile generation in the guest, and old generations keep their closures alive. nixant does not collect garbage. Free space manually with:
 
 ```console
-$ nixant exec -- sudo nix-collect-garbage -d
+$ incus exec local:NAME -- nix-collect-garbage -d
 ```
 
 On the host, only the latest build per target has a GC root.

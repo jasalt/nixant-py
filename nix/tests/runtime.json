@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "container",
   "instanceName": "test-dev",
   "user": {"name": "dev", "uid": 1000, "gid": 1000, "home": "/home/dev", "shell": "/run/current-system/sw/bin/bash"},
@@ -11,6 +11,7 @@
   "workdir": "/workspace",
   "ephemeral": false,
   "wayland": false,
+  "desktopMode": "nested",
   "gpu": null,
   "logs": {}
 }

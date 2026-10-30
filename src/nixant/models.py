@@ -9,6 +9,9 @@ from typing import Any
 from nixant.errors import NixantError
 
 SCHEMA_VERSION = 1
+# Instance ownership metadata stays at v1. Runtime v2 protects nested displays
+# from older CLIs that would otherwise ignore desktopMode and expose upstream.
+RUNTIME_SCHEMA_VERSION = 2
 
 # Incus instance names, which are also guest hostnames. nix/modules/options.nix
 # enforces the same rule at evaluation time.
@@ -114,6 +117,8 @@ class MachineSpec:
     ports: tuple[PortSpec, ...] = ()
     ephemeral: bool = False
     wayland: bool = False
+    # Older runtime exports used direct forwarding; retain that interpretation.
+    desktop_mode: str = "direct"
     # The guest's render group; None leaves the host GPU unshared.
     gpu_gid: int | None = None
     # (name, guest path) pairs that `nixant logs NAME` shows.
@@ -121,7 +126,7 @@ class MachineSpec:
 
     def to_runtime(self) -> dict[str, Any]:
         return {
-            "schemaVersion": SCHEMA_VERSION,
+            "schemaVersion": RUNTIME_SCHEMA_VERSION,
             "kind": self.kind,
             "instanceName": self.instance_name,
             "user": {
@@ -154,6 +159,7 @@ class MachineSpec:
             "workdir": self.workdir,
             "ephemeral": self.ephemeral,
             "wayland": self.wayland,
+            "desktopMode": self.desktop_mode,
             "gpu": None if self.gpu_gid is None else {"gid": self.gpu_gid},
             "logs": dict(self.logs),
         }
@@ -165,7 +171,7 @@ class MachineSpec:
             raise NixantError("invalid nixant runtime: expected an object")
         if (
             type(data.get("schemaVersion")) is not int
-            or data["schemaVersion"] != SCHEMA_VERSION
+            or data["schemaVersion"] not in (1, RUNTIME_SCHEMA_VERSION)
         ):
             raise NixantError(
                 f"nixant runtime schema {data.get('schemaVersion')!r} is unsupported; "
@@ -197,6 +203,11 @@ class MachineSpec:
                 workdir=_absolute(data["workdir"]),
                 ephemeral=_boolean(data.get("ephemeral", False)),
                 wayland=_boolean(data.get("wayland", False)),
+                desktop_mode=_string(
+                    data["desktopMode"]
+                    if data["schemaVersion"] == RUNTIME_SCHEMA_VERSION
+                    else data.get("desktopMode", "direct")
+                ),
                 gpu_gid=_optional_gid(data.get("gpu")),
                 logs=_logs(data.get("logs", {})),
                 cpus=_optional_integer(data["cpus"]),
@@ -214,6 +225,8 @@ class MachineSpec:
             )
             if INSTANCE_NAME.fullmatch(spec.instance_name) is None:
                 raise ValueError("invalid Incus instance name")
+            if spec.desktop_mode not in ("nested", "direct"):
+                raise ValueError("desktopMode must be nested or direct")
             if spec.kind not in ("container", "vm"):
                 raise ValueError("kind must be container or vm")
             if spec.user.name == "root":

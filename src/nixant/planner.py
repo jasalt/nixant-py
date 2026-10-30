@@ -376,8 +376,9 @@ def _wayland(
             "bind": "container",
             "connect": f"unix:{socket}" if socket else recorded or default,
             "listen": f"unix:{WAYLAND_LISTEN}",
-            "uid": uid,
-            "gid": gid,
+            # Only root's Weston may connect upstream in nested mode.
+            "uid": "0" if spec.desktop_mode == "nested" else uid,
+            "gid": "0" if spec.desktop_mode == "nested" else gid,
             "mode": "0600",
             # Connect to the compositor as the host user, not as root.
             "security.uid": uid,

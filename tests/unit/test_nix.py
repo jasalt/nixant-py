@@ -40,6 +40,20 @@ def test_frozen_runtime(runtime: dict) -> None:
         spec.kind = "vm"
 
 
+def test_legacy_runtime_keeps_direct_wayland(runtime: dict) -> None:
+    runtime["schemaVersion"] = 1
+    del runtime["desktopMode"]
+    assert MachineSpec.from_runtime(runtime).desktop_mode == "direct"
+
+
+@pytest.mark.parametrize("mode", ["nested", "direct"])
+def test_desktop_runtime_roundtrip(runtime: dict, mode: str) -> None:
+    runtime["desktopMode"] = mode
+    spec = MachineSpec.from_runtime(runtime)
+    assert spec.desktop_mode == mode
+    assert spec.to_runtime() == runtime
+
+
 def test_gpu_runtime_roundtrip(runtime: dict) -> None:
     runtime["gpu"] = {"gid": 303}
     spec = MachineSpec.from_runtime(runtime)
@@ -47,7 +61,7 @@ def test_gpu_runtime_roundtrip(runtime: dict) -> None:
     assert spec.to_runtime() == runtime
 
 
-@pytest.mark.parametrize("version", [None, 2, True, "1"])
+@pytest.mark.parametrize("version", [None, 3, True, "1"])
 def test_schema_drift(runtime: dict, version: object) -> None:
     runtime["schemaVersion"] = version
     with pytest.raises(NixantError, match="matching nixant version"):
@@ -65,6 +79,8 @@ def test_schema_drift(runtime: dict, version: object) -> None:
         ("mounts", []),
         ("ports", {}),
         ("wayland", "yes"),
+        ("desktopMode", "unknown"),
+        ("desktopMode", True),
         ("gpu", True),
         ("gpu", {"gid": 0}),
     ],

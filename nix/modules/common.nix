@@ -1,12 +1,13 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.nixant;
-  agent = cfg.isolation == "agent";
+  nested = cfg.wayland && cfg.desktop.mode == "nested";
+  displaySocket = if nested then "/run/nixant-desktop/wayland-0" else "/dev/nixant-wayland-0";
   message = "This system is managed by nixant (instance ${cfg.instanceName}). Edit the project flake and run `nixant rebuild` on the host.";
   stub = pkgs.writeText "nixant-configuration.nix" "throw ${builtins.toJSON message}\n";
   readme = pkgs.writeText "nixant-nixos-README" "${message}\n";
 in {
-  imports = [ ./options.nix ];
+  imports = [ ./options.nix ./desktop.nix ];
   nixant.enable = true;
   networking = {
     hostName = lib.mkDefault cfg.instanceName;
@@ -19,7 +20,7 @@ in {
     uid = cfg.user.uid;
     group = cfg.user.name;
     home = "/home/${cfg.user.name}";
-    extraGroups = lib.optional (!agent) "wheel" ++ lib.optional cfg.gpu "render";
+    extraGroups = lib.optional cfg.user.sudo "wheel" ++ lib.optional cfg.gpu "render";
     # shell and exec use runuser, which opens no login session; lingering
     # keeps the user manager and /run/user/<uid> around for Wayland.
     linger = lib.mkIf cfg.wayland true;
@@ -32,13 +33,13 @@ in {
   nix.settings = {
     experimental-features = lib.mkDefault [ "nix-command" "flakes" ];
     # NixOS defines root at normal priority; mkDefault here would drop the user.
-    trusted-users = lib.mkIf (!agent) [ cfg.user.name ];
+    trusted-users = lib.mkIf cfg.user.sudo [ cfg.user.name ];
   };
   # The nixant-wayland proxy device listens on /dev/nixant-wayland-0: /dev is
   # the only guest directory that exists before boot, and the runtime dir is a
   # fresh tmpfs per user manager, so it is linked into place from there.
   systemd.user.tmpfiles.users.${cfg.user.name}.rules = lib.mkIf cfg.wayland
-    [ "L+ %t/wayland-0 - - - - /dev/nixant-wayland-0" ];
+    [ "L+ %t/wayland-0 - - - - ${displaySocket}" ];
   environment.sessionVariables = lib.mkMerge [
     (lib.mkIf cfg.wayland {
       WAYLAND_DISPLAY = "wayland-0";
@@ -48,7 +49,7 @@ in {
   ];
   # Exits when the host compositor goes away and reconnects on restart.
   systemd.user.services.nixant-xwayland = lib.mkIf cfg.x11 {
-    description = "X11 apps on the host Wayland compositor";
+    description = "X11 apps on the configured Wayland compositor";
     wantedBy = [ "default.target" ];
     after = [ "systemd-tmpfiles-setup.service" ];
     unitConfig.ConditionUser = cfg.user.name;

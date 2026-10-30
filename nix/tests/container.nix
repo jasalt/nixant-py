@@ -18,13 +18,18 @@ let
       !config.networking.useHostResolvConf &&
       config.systemd.network.networks."10-eth0".networkConfig.DHCP == "yes";
     user = config.users.users.dev.uid == 1000 && config.users.groups.dev.gid == 1000 &&
-      builtins.elem "wheel" config.users.users.dev.extraGroups;
+      !(builtins.elem "wheel" config.users.users.dev.extraGroups);
     sudo = lib.any (rule: rule.users == [ "dev" ] &&
       lib.any (command: command.command == "ALL" && builtins.elem "NOPASSWD" command.options) rule.commands)
-      config.security.sudo.extraRules;
+      (evaluate { nixant.user.sudo = true; }).security.sudo.extraRules;
     noSudo = !(lib.any (rule: builtins.elem "dev" rule.users)
       (evaluate { nixant.user.sudo = false; }).security.sudo.extraRules);
-    trusted = lib.all (name: builtins.elem name config.nix.settings.trusted-users) [ "root" "dev" ];
+    trusted = config.nix.settings.trusted-users == [ "root" ];
+    defaultNoSudo = !(lib.any (rule: builtins.elem "dev" rule.users) config.security.sudo.extraRules);
+    nestedSudoRejected = !(lib.all (item: item.assertion)
+      (evaluate { nixant.wayland = true; nixant.user.sudo = true; }).assertions);
+    nestedTrustRejected = !(lib.all (item: item.assertion)
+      (evaluate { nixant.wayland = true; nix.settings.trusted-users = [ "dev" ]; }).assertions);
     flakes = builtins.elem "flakes" config.nix.settings.experimental-features;
     staleGuard = lib.hasInfix "rm -f /etc/nixos/configuration.nix /etc/nixos/incus.nix"
       config.system.activationScripts.nixant-stale-config.text;
@@ -45,9 +50,17 @@ let
     wayland = let wl = evaluate { nixant.wayland = true; }; in
       wl.nixant.runtime.wayland && wl.users.users.dev.linger == true &&
       wl.environment.sessionVariables.WAYLAND_DISPLAY == "wayland-0" &&
-      builtins.elem "L+ %t/wayland-0 - - - - /dev/nixant-wayland-0"
+      wl.nixant.runtime.desktopMode == "nested" &&
+      wl.systemd.services.nixant-weston.serviceConfig.User == "root" &&
+      wl.systemd.services.nixant-weston.serviceConfig.RuntimeDirectoryMode == "0700" &&
+      builtins.elem "L+ %t/wayland-0 - - - - /run/nixant-desktop/wayland-0"
         wl.systemd.user.tmpfiles.users.dev.rules &&
       lib.hasInfix "XDG_RUNTIME_DIR" wl.environment.extraInit;
+    directWayland = let wl = evaluate { nixant.wayland = true; nixant.desktop.mode = "direct"; }; in
+      wl.nixant.runtime.desktopMode == "direct" &&
+      !(wl.systemd.services ? nixant-weston) &&
+      builtins.elem "L+ %t/wayland-0 - - - - /dev/nixant-wayland-0" wl.systemd.user.tmpfiles.users.dev.rules;
+    noWeston = !(config.systemd.services ? nixant-weston);
     noX11 = !(config.systemd.user.services ? nixant-xwayland) &&
       !(config.environment.sessionVariables ? DISPLAY);
     x11 = let x = evaluate { nixant.wayland = true; nixant.x11 = true; }; in

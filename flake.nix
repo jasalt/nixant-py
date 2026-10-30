@@ -32,6 +32,8 @@
         };
 
         inherit wp-site;
+        # Explicit integration test (requires KVM): nix build .#desktop-vm-test
+        desktop-vm-test = import ./nix/tests/desktop-vm.nix { inherit pkgs; };
         # Boots a VM (needs KVM), so it is not part of `nix flake check`:
         # nix build .#wordpress-vm-test
         wordpress-vm-test = import (wordpress + "/tests/vm.nix") {
@@ -55,7 +57,7 @@
       templates = {
         default = {
           path = ./nix/templates/default;
-          description = "Minimal NixOS container with a sudo user";
+          description = "Minimal NixOS container with an unprivileged dev user";
         };
         node = {
           path = ./nix/templates/node;

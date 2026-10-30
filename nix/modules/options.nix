@@ -89,6 +89,10 @@ let
       message = "nixant.logs names must be lowercase letters, digits, dots, dashes or underscores."; }
     { assertion = lib.all absolute (builtins.attrValues cfg.logs);
       message = "nixant.logs paths must be absolute guest paths."; }
+    { assertion = !(cfg.wayland && cfg.desktop.mode == "nested") ||
+        (!cfg.user.sudo && !(builtins.elem "wheel" user.extraGroups) &&
+         config.nix.settings.trusted-users == [ "root" ]);
+      message = "Nested Wayland requires an unprivileged user: disable nixant.user.sudo, remove wheel membership, and keep nix.settings.trusted-users restricted to root. Use desktop.mode = \"direct\" to opt out."; }
     { assertion = !cfg.x11 || cfg.wayland;
       message = "nixant.x11 runs X11 apps on the Wayland socket; also set nixant.wayland = true."; }
     { assertion = lib.versionAtLeast lib.trivial.release "26.05";
@@ -103,8 +107,8 @@ in {
     user = {
       name = mkOption { type = types.str; default = "dev"; };
       uid = mkOption { type = types.ints.unsigned; default = 1000; };
-      # Explicit values win; an explicit true under isolation = "agent" is rejected.
-      sudo = mkOption { type = types.bool; default = !agent; };
+      # Administrative access is opt-in and incompatible with nested Wayland.
+      sudo = mkOption { type = types.bool; default = false; };
     };
     isolation = mkOption {
       type = types.enum [ "none" "agent" ];
@@ -143,9 +147,19 @@ in {
       type = types.bool;
       default = false;
       description = ''
-        Show guest windows on the host: the host's Wayland socket is proxied
-        to the guest user as wayland-0. Containers only.
+        Show guest windows in a private nested Weston desktop by default.
+        Set desktop.mode = "direct" to share the host display directly.
+        Containers only.
       '';
+    };
+    desktop = {
+      mode = mkOption {
+        type = types.enum [ "nested" "direct" ];
+        default = "nested";
+        description = "Nested root-managed Weston desktop, or direct host display access.";
+      };
+      width = mkOption { type = types.ints.positive; default = 1440; };
+      height = mkOption { type = types.ints.positive; default = 900; };
     };
     x11 = mkOption {
       type = types.bool;
@@ -180,7 +194,8 @@ in {
     };
     assertions = validations;
     nixant.runtime = if errors != [] then throw (lib.concatStringsSep "\n" errors) else {
-      schemaVersion = 1;
+      # v1 CLIs must refuse this export: they grant dev the upstream socket.
+      schemaVersion = 2;
       kind = if config.boot.isContainer then "container" else "vm";
       inherit (cfg) instanceName cpus ephemeral;
       memoryBytes = cfg.memory;
@@ -188,6 +203,7 @@ in {
       mounts = lib.mapAttrs (_: mount: { inherit (mount) source target readOnly; }) mounts;
       ports = map (port: { inherit (port) host guest address hostname; }) cfg.ports;
       inherit (cfg) wayland logs;
+      desktopMode = cfg.desktop.mode;
       gpu = if cfg.gpu then { gid = config.users.groups.render.gid; } else null;
       workdir = if cfg.workdir != null then cfg.workdir
         else if mounts ? workspace then mounts.workspace.target else user.home;
