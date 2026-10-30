@@ -40,6 +40,9 @@ def deploy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Mock]:
         mocks[name] = Mock(return_value=value)
         module = "cli" if name in ("check_host_tools", "discover_project") else "deploy"
         monkeypatch.setattr(f"nixant.{module}.{name}", mocks[name])
+    monkeypatch.setattr(
+        "nixant.cli.Runner", Mock(return_value=Mock(spec=Runner, verbose=False))
+    )
     mocks["provider"] = Mock()
     mocks["provider"].inspect.return_value = MachineState(
         "test-dev", "Stopped", "container", {}, {}

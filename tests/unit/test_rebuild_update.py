@@ -23,9 +23,9 @@ def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 @pytest.mark.parametrize(
     "options,inputs",
-    [([], None), (["--update"], []),
-     (["--update-input", "devtools", "--update-input", "pig-extensions",
-       "--update-input", "devtools"], ["devtools", "pig-extensions"])],
+    [(["--no-update"], None), ([], []),
+     (["--update", "devtools", "--update", "pig-extensions",
+       "--update", "devtools"], ["devtools", "pig-extensions"])],
 )
 def test_refresh_before_rebuild(setup, options, inputs):
     root, runner, rebuild = setup
@@ -48,17 +48,18 @@ def test_refresh_before_rebuild(setup, options, inputs):
 def test_update_failure_does_not_rebuild(setup):
     _, runner, rebuild = setup
     runner.run.side_effect = NixantError("update failed")
-    result = CliRunner().invoke(app, ["rebuild", "dev", "--update"])
+    result = CliRunner().invoke(app, ["rebuild", "dev"])
     assert result.exit_code == 1
     assert "update failed" in result.output
     rebuild.assert_not_called()
 
 
 @pytest.mark.parametrize("options", [
-    ["--update", "--update-input", "devtools"],
-    ["--update-input=--impure"],
-    ["--update-input="],
-    ["--update", "--timeout", "invalid"],
+    ["--no-update", "--update", "devtools"],
+    ["--update=--impure"],
+    ["--update="],
+    ["--timeout", "invalid"],
+    ["--update"],
 ])
 def test_invalid_options_do_not_update(setup, options):
     _, runner, rebuild = setup

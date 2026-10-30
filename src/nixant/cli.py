@@ -204,31 +204,31 @@ def rebuild(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
     timeout: str | None = typer.Option(None, help="Activation deadline, e.g. 5m."),
-    update: bool = typer.Option(
-        False, "--update", help="Update all project flake inputs before rebuilding."
+    no_update: bool = typer.Option(
+        False, "--no-update", help="Keep the current project flake lock."
     ),
     update_input: Annotated[
         list[str] | None,
         typer.Option(
-            "--update-input",
-            help="Update a named flake input before rebuilding (repeatable).",
+            "--update",
+            help="Update only this input (repeatable); default: update all inputs.",
         ),
     ] = None,
 ) -> None:
-    """Build and always activate an existing running environment."""
+    """Update inputs, build and always activate an existing running environment."""
     update_input = update_input or []
-    if update and update_input:
-        raise UsageError("use either --update or --update-input, not both")
+    if no_update and update_input:
+        raise UsageError("use either --no-update or --update NAME, not both")
     if any(not name or name.startswith("-") for name in update_input):
         raise UsageError(
-            "--update-input requires a non-empty input name, not an option"
+            "--update requires a non-empty input name, not an option"
         )
 
     def refresh_and_rebuild(
         provider: IncusProvider, runner: Runner, root: Path,
         selected: str, duration: float,
     ) -> None:
-        if update or update_input:
+        if not no_update:
             names = list(dict.fromkeys(update_input))
             label = ", ".join(names) if names else "all"
             typer.echo(
