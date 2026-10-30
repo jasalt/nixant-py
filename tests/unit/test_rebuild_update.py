@@ -21,19 +21,18 @@ def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return tmp_path, runner, rebuild
 
 
-@pytest.mark.parametrize("command", ["rebuild", "reload"])
 @pytest.mark.parametrize(
     "options,inputs",
     [([], None), (["--update"], []),
      (["--update-input", "devtools", "--update-input", "pig-extensions",
        "--update-input", "devtools"], ["devtools", "pig-extensions"])],
 )
-def test_refresh_before_rebuild(setup, command, options, inputs):
+def test_refresh_before_rebuild(setup, options, inputs):
     root, runner, rebuild = setup
     events = []
     runner.run.side_effect = lambda *a, **kw: events.append("update")
     rebuild.side_effect = lambda *a: events.append("rebuild")
-    result = CliRunner().invoke(app, [command, "dev", *options])
+    result = CliRunner().invoke(app, ["rebuild", "dev", *options])
     assert result.exit_code == 0, result.output
     if inputs is None:
         runner.run.assert_not_called()

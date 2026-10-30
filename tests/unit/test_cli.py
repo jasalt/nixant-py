@@ -18,6 +18,13 @@ def test_help() -> None:
     assert "--verbose" in result.stdout
 
 
+def test_reload_alias_removed() -> None:
+    assert "reload" not in app_commands()
+    result = CliRunner().invoke(app, ["reload"])
+    assert result.exit_code == 2
+    assert "No such command" in result.output
+
+
 def test_unknown_command_is_usage_error() -> None:
     result = CliRunner().invoke(app, ["not-a-command"])
     assert result.exit_code == 2

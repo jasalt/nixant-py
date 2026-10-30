@@ -113,9 +113,8 @@ def test_rebuild_always_activates_without_mount_changes(
     deploy["provider"].verify_mounts.assert_not_called()
 
 
-@pytest.mark.parametrize("command", ["rebuild", "reload"])
-def test_rebuild_missing(deploy: dict[str, Mock], command: str) -> None:
-    result = CliRunner().invoke(app, [command])
+def test_rebuild_missing(deploy: dict[str, Mock]) -> None:
+    result = CliRunner().invoke(app, ["rebuild"])
     assert result.exit_code == 1
     assert "run nixant up" in result.output
     deploy["provider"].create.assert_not_called()
