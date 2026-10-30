@@ -204,9 +204,43 @@ def rebuild(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help=CWD_TARGET_HELP),
     timeout: str | None = typer.Option(None, help="Activation deadline, e.g. 5m."),
+    update: bool = typer.Option(
+        False, "--update", help="Update all project flake inputs before rebuilding."
+    ),
+    update_input: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--update-input",
+            help="Update a named flake input before rebuilding (repeatable).",
+        ),
+    ] = None,
 ) -> None:
     """Build and always activate an existing running environment."""
-    _deploy(ctx, target, timeout, deploy.rebuild)
+    update_input = update_input or []
+    if update and update_input:
+        raise UsageError("use either --update or --update-input, not both")
+    if any(not name or name.startswith("-") for name in update_input):
+        raise UsageError(
+            "--update-input requires a non-empty input name, not an option"
+        )
+
+    def refresh_and_rebuild(
+        provider: IncusProvider, runner: Runner, root: Path,
+        selected: str, duration: float,
+    ) -> None:
+        if update or update_input:
+            names = list(dict.fromkeys(update_input))
+            label = ", ".join(names) if names else "all"
+            typer.echo(
+                f"updating flake inputs: {label}…",
+                err=True,
+            )
+            runner.run(
+                ["nix", "flake", "update", *names], cwd=config_directory(root)
+            )
+        deploy.rebuild(provider, runner, root, selected, duration)
+
+    _deploy(ctx, target, timeout, refresh_and_rebuild)
 
 
 # For Vagrant habits; unlike vagrant reload it does not restart the machine.
