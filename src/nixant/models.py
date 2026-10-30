@@ -175,7 +175,7 @@ class MachineSpec:
         ):
             raise NixantError(
                 f"nixant runtime schema {data.get('schemaVersion')!r} is unsupported; "
-                "run nix flake update nixant or use a matching nixant version"
+                "use a matching host CLI (try nixant update) and project module"
             )
         try:
             if not isinstance(data["ports"], list):

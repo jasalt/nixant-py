@@ -215,6 +215,12 @@ hosts get a 404, and a hostname claimed by two instances is not routed.
 
 Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy on the desktop with `nixant proxy --routes-from 'limactl shell default nixant proxy --routes'`; `--routes` prints the route table as JSON and the desktop polls it every few seconds. The desktop needs `caddy` and `nixant`, and Lima's forwards of the sites' ports to the desktop's loopback.
 
+## Updating the host CLI
+
+`nixant update` updates the host CLI, not project inputs or the guest. It matches the running executable to a uniquely identified entry in the current user's default Nix profile, prints the command, and runs `nix profile upgrade ENTRY --refresh --profile PROFILE`. It needs Nix, but not Incus or a project directory. Run `nixant version` afterward in a new invocation.
+
+Only recognized moving flake sources are upgraded automatically. Local-path sources use local contents without `git pull`. Revision pins, unsupported/older profile metadata, ambiguous installations, and development shells are refused with guidance. NixOS/Home Manager installations must be updated through their owning configuration; temporary `nix run` invocations and checkouts should be refreshed at their source. Custom profiles are not automatically searched. No sudo, source replacement, or upgrade of unrelated entries is performed.
+
 ## Wayland windows
 
 `nixant.wayland = true` runs a private **nested Weston desktop inside the container**, presenting its applications in one host window. `nixant.desktop.mode = "nested"` is the default; set it to `"direct"` to show application windows individually on the host instead. Optional `nixant.desktop.width` and `height` default to 1440 and 900.

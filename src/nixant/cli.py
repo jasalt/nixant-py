@@ -15,7 +15,7 @@ import click
 import typer
 from typer.core import TyperGroup
 
-from nixant import deploy, doctor, snapshots
+from nixant import deploy, doctor, self_update, snapshots
 from nixant.adopt import adopt as adopt_instance
 from nixant.adopt import choose
 from nixant.errors import CommandError, NixantError, UsageError
@@ -108,6 +108,7 @@ def main(
     if not ctx.meta.get("nixant.help") and ctx.invoked_subcommand not in {
         "doctor",
         "version",
+        "update",
     }:
         check_host_tools()
     ctx.ensure_object(dict)
@@ -124,6 +125,12 @@ def _version_string() -> str:
 def version() -> None:
     """Print the nixant version and source revision, when available."""
     typer.echo(_version_string())
+
+
+@app.command()
+def update(ctx: typer.Context) -> None:
+    """Update this host CLI when a safe Nix profile installation is recognized."""
+    self_update.update(ctx.obj["runner"])
 
 
 # A stuck switch-to-configuration never returns on its own (nixant-1va.3).

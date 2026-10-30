@@ -64,7 +64,7 @@ def test_gpu_runtime_roundtrip(runtime: dict) -> None:
 @pytest.mark.parametrize("version", [None, 3, True, "1"])
 def test_schema_drift(runtime: dict, version: object) -> None:
     runtime["schemaVersion"] = version
-    with pytest.raises(NixantError, match="matching nixant version"):
+    with pytest.raises(NixantError, match="matching host CLI .*nixant update"):
         MachineSpec.from_runtime(runtime)
 
 
