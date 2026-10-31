@@ -8,6 +8,7 @@ let
     [shell]
     locking=false
     panel-position=none
+    background-color=0xff000000
     [launcher]
     icon=${pkgs.weston}/share/weston/terminal.png
     path=${pkgs.coreutils}/bin/true
