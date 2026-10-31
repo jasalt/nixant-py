@@ -211,7 +211,7 @@ the current project, and does not need a project directory. It serves only on
 its admin API on a Unix socket in `$XDG_RUNTIME_DIR`, and follows the running
 instances in Incus, so routes appear and vanish with `up` and `down`. Unknown
 hosts get a 404, and a hostname claimed by two instances is not routed.
-`--https` also serves `https://mysite.localhost` on 443 with certificates from Caddy's own CA; run `caddy trust` once so browsers accept it (`--https-port` changes the port). Port 80 needs permission to bind low ports, which nixant never configures; `nixant proxy --print-setup` shows the options, or pass `--port` to use another port.
+`--https` also serves `https://mysite.localhost` on 443 with certificates from Caddy's own CA; run `caddy trust` once so browsers accept it (`--https-port` changes the port). Add `--https-to-http` to redirect matching HTTPS requests to their `http://` URL instead of proxying them; it requires `--https`. Port 80 needs permission to bind low ports, which nixant never configures; `nixant proxy --print-setup` shows the options, or pass `--port` to use another port.
 
 Under Lima, where Incus runs in the VM but the browser on the desktop, run Caddy on the desktop with `nixant proxy --routes-from 'limactl shell default nixant proxy --routes'`; `--routes` prints the route table as JSON and the desktop polls it every few seconds. The desktop needs `caddy` and `nixant`, and Lima's forwards of the sites' ports to the desktop's loopback.
 

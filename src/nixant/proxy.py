@@ -86,19 +86,40 @@ def caddy_config(
     *,
     http_port: int = 80,
     https_port: int | None = None,
+    https_to_http: bool = False,
 ) -> dict[str, Any]:
-    handlers: list[dict[str, Any]] = [
-        {
-            "match": [{"host": [hostname]}],
-            "handle": [
+    handlers: list[dict[str, Any]] = []
+    for hostname, port in sorted(routes.items()):
+        if https_to_http:
+            handlers.append(
                 {
-                    "handler": "reverse_proxy",
-                    "upstreams": [{"dial": f"127.0.0.1:{port}"}],
+                    "match": [
+                        {"host": [hostname], "protocol": "https"}
+                    ],
+                    "handle": [
+                        {
+                            "handler": "static_response",
+                            "status_code": 308,
+                            "headers": {
+                                "Location": [
+                                    f"http://{hostname}{{http.request.uri}}"
+                                ]
+                            },
+                        }
+                    ],
                 }
-            ],
-        }
-        for hostname, port in sorted(routes.items())
-    ]
+            )
+        handlers.append(
+            {
+                "match": [{"host": [hostname]}],
+                "handle": [
+                    {
+                        "handler": "reverse_proxy",
+                        "upstreams": [{"dial": f"127.0.0.1:{port}"}],
+                    }
+                ],
+            }
+        )
     # Anything else, including a rebinding attacker's name, reaches no instance.
     handlers.append(
         {
@@ -210,6 +231,7 @@ def serve(
     port: int = 80,
     https_port: int | None = None,
     watch_incus: bool = True,
+    https_to_http: bool = False,
 ) -> None:
     caddy = shutil.which("caddy")
     if caddy is None:
@@ -228,7 +250,14 @@ def serve(
             for name, p in sorted(table.items())
         )
         print(f"nixant proxy: routes: {shown or 'none'}", file=sys.stderr, flush=True)
-        return caddy_config(table, admin, listen, http_port=port, https_port=https_port)
+        return caddy_config(
+            table,
+            admin,
+            listen,
+            http_port=port,
+            https_port=https_port,
+            https_to_http=https_to_http,
+        )
 
     admin.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="nixant-proxy-") as scratch:

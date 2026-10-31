@@ -128,6 +128,25 @@ def test_https_config_uses_the_internal_ca_on_loopback() -> None:
     }
 
 
+def test_https_requests_can_redirect_to_http_for_matching_hosts() -> None:
+    config = caddy_config(
+        {"a.localhost": 8001},
+        Path("/s.sock"),
+        ["127.0.0.1:80", "127.0.0.1:443"],
+        https_port=443,
+        https_to_http=True,
+    )
+    handlers = config["apps"]["http"]["servers"]["nixant"]["routes"]
+    assert handlers[0]["match"] == [
+        {"host": ["a.localhost"], "protocol": "https"}
+    ]
+    assert handlers[0]["handle"][0]["status_code"] == 308
+    assert handlers[0]["handle"][0]["headers"]["Location"] == [
+        "http://a.localhost{http.request.uri}"
+    ]
+    assert handlers[1]["handle"][0]["handler"] == "reverse_proxy"
+
+
 def test_http_only_config_has_no_tls() -> None:
     config = caddy_config({"a.localhost": 1}, Path("/s.sock"), ["127.0.0.1:80"])
     assert "tls" not in config["apps"]
